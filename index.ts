@@ -164,7 +164,11 @@ type FnDecl = {
 
 type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl);
 type Mutability = 'imm' | 'mut';
-type AstTy = { type: 'Literal', ident: string } | { type: 'Array', elemTy: AstTy, len: number } | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy };
+type RecordFields<Ty> = ([string, Ty])[];
+type AstTy = { type: 'Literal', ident: string }
+    | { type: 'Array', elemTy: AstTy, len: number }
+    | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
+    | { type: 'Record', fields: RecordFields<AstTy> }
 type Program = { stmts: Stmt[] };
 type LeftToRight = 'ltr';
 type RightToLeft = 'rtl';
@@ -237,6 +241,18 @@ function parse(src: string): Program {
                 i++;
                 break;
             default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
+            case TokenType.LBrace:
+                i++;
+                const fields: RecordFields<AstTy> = [];
+                while (!eatToken(TokenType.RBrace, false)) {
+                    eatToken(TokenType.Comma, false);
+                    const key = expectIdent();
+                    eatToken(TokenType.Colon, true);
+                    const value = parseTy();
+                    fields.push([key, value]);
+                }
+                ty = { type: 'Record', fields };
+                break;
         }
 
         while (i < tokens.length) {
@@ -471,6 +487,9 @@ function computeResolutions(ast: Program): Resolutions {
             }
             case 'Array': resolveTy(ty.elemTy); break;
             case 'Pointer': resolveTy(ty.pointeeTy); break;
+            case 'Record':
+                for (const [, v] of ty.fields) resolveTy(v);
+                break;
             default: assertUnreachable(ty);
         }
     }
@@ -566,7 +585,8 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentFn: FnDecl }
     | { type: 'FnDef', decl: FnDecl }
-    | { type: 'Pointer', mtb: Mutability, pointee: Ty };
+    | { type: 'Pointer', mtb: Mutability, pointee: Ty }
+    | { type: 'Record', fields: RecordFields<Ty> };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index';
@@ -652,6 +672,16 @@ function ppTy(ty: Ty): string {
         case 'TyParam': return ty.parentFn.generics[ty.id];
         case 'TyVid': return `?${ty.id}t`;
         case 'FnDef': todo('pretty print fndef');
+        case 'Record': {
+            let out = '{';
+            for (let i = 0; i < ty.fields.length; i++) {
+                if (i !== 0) {
+                    out += ',';
+                }
+                out += `${ty.fields[i][0]}: ${ppTy(ty.fields[i][1])}`;
+            }
+            return out + '}';
+        }
     }
 }
 
@@ -696,6 +726,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 }
                 case 'Array': return { type: 'Array', elemTy: lowerTy(ty.elemTy), len: ty.len };
                 case 'Pointer': return { type: 'Pointer', mtb: ty.mtb, pointee: lowerTy(ty.pointeeTy) };
+                case 'Record': return { type: 'Record', fields: ty.fields.map(([k, ty]) => [k, lowerTy(ty)]) };
                 default: assertUnreachable(ty);
             }
         }
@@ -884,6 +915,7 @@ function mangleTy(ty: Ty): string {
             throw new Error(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
+        case 'Record': todo('mangle record ty');
         default: assertUnreachable(ty);
     }
 }
@@ -1041,6 +1073,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'string':
             case 'FnDef':
             case 'Array':
+            case 'Record':
                 todo(ty.type);
             case 'TyVid':
             case 'never':
