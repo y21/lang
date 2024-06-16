@@ -19,6 +19,8 @@ enum TokenType {
     Function,
     Let,
     Return,
+    Type,
+    Constructible,
     Ident,
     LParen,
     RParen,
@@ -113,6 +115,8 @@ function tokenize(src: string): Token[] {
                         case 'let': ty = TokenType.Let; break;
                         case 'return': ty = TokenType.Return; break;
                         case 'mut': ty = TokenType.Mut; break;
+                        case 'type': ty = TokenType.Type; break;
+                        case 'constructible': ty = TokenType.Constructible; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });
@@ -152,23 +156,32 @@ type Expr = { span: Span } & (
     | { type: "Binary"; op: TokenType; lhs: Expr; rhs: Expr }
     | { type: 'AddrOf', pointee: Expr, mtb: Mutability }
     | { type: 'Deref', pointee: Expr }
+    | { type: 'Record', fields: RecordFields<Expr> }
 );
 
 
 type LetDecl = { type: 'LetDecl', name: string, init: Expr };
 
 type FnDecl = {
-    type: 'FnDecl', name: string, generics: string[],
-    ret: AstTy, body: Expr
+    type: 'FnDecl',
+    name: string,
+    generics: Generics,
+    ret: AstTy,
+    body: Expr
 };
-
-type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl);
+type Generics = string[];
+type TyAliasDecl = { type: 'TyAlias', name: string, generics: Generics, constructibleIn: Path<AstTy>[], alias: AstTy };
+type GenericArg<Ty> = { type: 'Type', ty: Ty };
+type PathSegment<Ty> = { ident: string; args: GenericArg<Ty>[] };
+type Path<Ty> = { segments: PathSegment<Ty>[] };
+type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl | TyAliasDecl);
 type Mutability = 'imm' | 'mut';
 type RecordFields<Ty> = ([string, Ty])[];
-type AstTy = { type: 'Literal', ident: string }
+type AstTy = { type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
     | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
     | { type: 'Record', fields: RecordFields<AstTy> }
+    | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] };
 type Program = { stmts: Stmt[] };
 type LeftToRight = 'ltr';
 type RightToLeft = 'rtl';
@@ -237,8 +250,20 @@ function parse(src: string): Program {
         let ty: AstTy;
         switch (tokens[i].ty) {
             case TokenType.Ident:
-                ty = { type: 'Literal', ident: snip(tokens[i].span) };
-                i++;
+                const ident = snip(tokens[i++].span);
+                const args: GenericArg<AstTy>[] = [];
+                if (eatToken(TokenType.Lt, false)) {
+                    while (!eatToken(TokenType.Gt, false)) {
+                        eatToken(TokenType.Comma, false);
+                        args.push({ type: 'Type', ty: parseTy() });
+                    }
+                }
+                const segment: PathSegment<AstTy> = {
+                    args,
+                    ident
+                };
+
+                ty = { type: 'Path', value: { segments: [segment] } };
                 break;
             default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
             case TokenType.LBrace:
@@ -277,6 +302,21 @@ function parse(src: string): Program {
             case TokenType.Number: expr = { type: 'Number', span: tokens[i].span, value: +snip(tokens[i].span) }; break;
             case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip(tokens[i].span) }; break;
             case TokenType.Ident: expr = { type: 'Literal', span: tokens[i].span, ident: snip(tokens[i].span) }; break;
+            case TokenType.Dot: {
+                const span = tokens[i].span;
+                i++;
+                eatToken(TokenType.LBrace);
+                const fields: RecordFields<Expr> = [];
+
+                while (!eatToken(TokenType.RBrace, false)) {
+                    eatToken(TokenType.Comma, false);
+                    const ident = expectIdent();
+                    eatToken(TokenType.Colon);
+                    const value = parseRootExpr();
+                    fields.push([ident, value]);
+                }
+                return { span: joinSpan(span, tokens[i - 1].span), type: 'Record', fields };
+            }
             default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
         }
         i++;
@@ -368,6 +408,19 @@ function parse(src: string): Program {
         return expr;
     }
 
+    // Assumes the current token is '<' in case of generics present.
+    function parseGenericsList(): string[] {
+        const generics: string[] = [];
+        if (eatToken(TokenType.Lt, false)) {
+            while (!eatToken(TokenType.Gt, false)) {
+                eatToken(TokenType.Comma, false);
+                const name = expectIdent();
+                generics.push(name);
+            }
+        }
+        return generics;
+    }
+
     let parseRootExpr = () => parseExpr(-1);
 
     function parseStmt(): Stmt {
@@ -375,14 +428,7 @@ function parse(src: string): Program {
             case TokenType.Function: {
                 i++;
                 const name = expectIdent();
-                const generics = [];
-
-                // generics
-                if (eatToken(TokenType.Lt, false)) {
-                    const name = expectIdent();
-                    generics.push(name);
-                    eatToken(TokenType.Gt);
-                }
+                const generics = parseGenericsList();
 
                 eatToken(TokenType.LParen);
                 // TODO: params
@@ -410,6 +456,26 @@ function parse(src: string): Program {
                 const init = parseRootExpr();
                 eatToken(TokenType.Semi);
                 return { span: joinSpan(letSpan, tokens[i - 1].span), type: 'LetDecl', name, init };
+            }
+            case TokenType.Type: {
+                const tySpan = tokens[i].span;
+                i++;
+                const name = expectIdent();
+                const generics = parseGenericsList();
+                const constructibleIn: Path<never>[] = [];
+
+                if (eatToken(TokenType.Constructible, false)) {
+                    eatToken(TokenType.LParen);
+                    while (!eatToken(TokenType.RParen, false)) {
+                        eatToken(TokenType.Comma, false);
+                        constructibleIn.push({ segments: [{ args: [], ident: expectIdent() }] });
+                    }
+                }
+
+                eatToken(TokenType.Assign);
+                const alias = parseTy();
+                eatToken(TokenType.Semi);
+                return { span: [tySpan[0], tokens[i - 1].span[1]], type: 'TyAlias', name, alias, constructibleIn, generics };
             }
             default: {
                 const value = parseRootExpr();
@@ -454,7 +520,7 @@ enum PrimitiveTy {
     I32,
 }
 type TyParamResolution = { type: 'TyParam', id: number, parentFn: FnDecl };
-type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy };
+type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
 type ValueResolution = FnDecl | LetDecl;
 type ValueResolutions = Map<Expr, ValueResolution>;
@@ -476,12 +542,16 @@ function computeResolutions(ast: Program): Resolutions {
 
     function resolveTy(ty: AstTy) {
         switch (ty.type) {
-            case 'Literal': {
-                switch (ty.ident) {
+            case 'Path': {
+                if (ty.value.segments.length !== 1) {
+                    throw new Error('path must have one segment');
+                }
+                const segment = ty.value.segments[0];
+                switch (segment.ident) {
                     case 'void': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Void }); break;
                     case 'never': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Never }); break;
                     case 'i32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I32 }); break;
-                    default: registerRes(ty.ident, ty, tyRes, tyMap); break;
+                    default: registerRes(segment.ident, ty, tyRes, tyMap); break;
                 }
                 break;
             }
@@ -490,6 +560,7 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Record':
                 for (const [, v] of ty.fields) resolveTy(v);
                 break;
+            case 'Alias': resolveTy(ty.alias); break;
             default: assertUnreachable(ty);
         }
     }
@@ -501,6 +572,11 @@ function computeResolutions(ast: Program): Resolutions {
             case 'LetDecl': {
                 valRes.add(stmt.name, stmt);
                 resolveExpr(stmt.init);
+                break;
+            }
+            case 'TyAlias': {
+                tyRes.add(stmt.name, stmt);
+                resolveTy(stmt.alias);
                 break;
             }
             default: assertUnreachable(stmt);
@@ -545,6 +621,11 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Deref':
                 resolveExpr(expr.pointee);
                 break;
+            case 'Record':
+                for (const [, v] of expr.fields) {
+                    resolveExpr(v);
+                }
+                break;
             default: assertUnreachable(expr);
         }
     }
@@ -562,12 +643,14 @@ function computeResolutions(ast: Program): Resolutions {
     }
 
     valRes.withScope(() => {
-        for (const stmt of ast.stmts) {
-            if (stmt.type === 'FnDecl' && stmt.name === 'main') {
-                entrypoint = stmt;
+        tyRes.withScope(() => {
+            for (const stmt of ast.stmts) {
+                if (stmt.type === 'FnDecl' && stmt.name === 'main') {
+                    entrypoint = stmt;
+                }
+                resolveStmt(stmt);
             }
-            resolveStmt(stmt);
-        }
+        });
     });
 
     if (!entrypoint) {
@@ -586,7 +669,8 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'TyParam', id: number, parentFn: FnDecl }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
-    | { type: 'Record', fields: RecordFields<Ty> };
+    | { type: 'Record', fields: RecordFields<Ty> }
+    | { type: 'Alias', decl: TyAliasDecl, alias: Ty };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index';
@@ -682,6 +766,7 @@ function ppTy(ty: Ty): string {
             }
             return out + '}';
         }
+        case 'Alias': return ppTy(ty.alias);
     }
 }
 
@@ -711,7 +796,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
         function lowerInner(ty: AstTy): Ty {
             switch (ty.type) {
-                case 'Literal': {
+                case 'Path': {
                     const tyres = res.tyResolutions.get(ty)!;
                     switch (tyres.type) {
                         case 'TyParam': return { type: 'TyParam', id: tyres.id, parentFn: tyres.parentFn };
@@ -721,12 +806,14 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             case PrimitiveTy.I32: return { type: 'i32' };
                             default: assertUnreachable(tyres.kind)
                         }
+                        case 'TyAlias': return { type: 'Alias', decl: tyres, alias: lowerTy(tyres.alias) };
                         default: assertUnreachable(tyres)
                     }
                 }
                 case 'Array': return { type: 'Array', elemTy: lowerTy(ty.elemTy), len: ty.len };
                 case 'Pointer': return { type: 'Pointer', mtb: ty.mtb, pointee: lowerTy(ty.pointeeTy) };
                 case 'Record': return { type: 'Record', fields: ty.fields.map(([k, ty]) => [k, lowerTy(ty)]) };
+                case 'Alias': throw new Error('cannot lower type aliases directly');
                 default: assertUnreachable(ty);
             }
         }
@@ -749,6 +836,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 infcx.registerLocal(stmt, rety);
                 break;
             }
+            case 'TyAlias': break;
             default: assertUnreachable(stmt);
         }
     }
@@ -811,6 +899,13 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         throw `Attempted to dereference non-pointer type ${pointee.type}`;
                     }
                 };
+                case 'Record': {
+                    const fields: RecordFields<Ty> = [];
+                    for (const [key, value] of expr.fields) {
+                        fields.push([key, typeckExpr(value)]);
+                    }
+                    return { type: 'Record', fields };
+                }
                 default: todo(expr.type);
             }
         }
@@ -855,7 +950,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 case 'UseInArithmeticOperation':
                                     message = `cannot add '${sub.type}' to '${sup.type}'`;
                                     break;
-                                default: message = `${sub.type} is not a subtype of ${sup.type} (reason: '${constraint.cause}')`;
+                                default: message = `${ppTy(sub)} is not a subtype of ${ppTy(sup)} (reason: '${constraint.cause}')`;
                             }
 
                             error(src, constraint.at, `type error: ${message}`);
@@ -915,6 +1010,7 @@ function mangleTy(ty: Ty): string {
             throw new Error(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
+        case 'Alias': return mangleTy(ty.alias);
         case 'Record': todo('mangle record ty');
         default: assertUnreachable(ty);
     }
@@ -982,6 +1078,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     break;
                 }
                 case 'Expr': lowerExpr(stmt.value); break;
+                case 'TyAlias': break;
                 default: assertUnreachable(stmt);
             }
         }
@@ -1073,6 +1170,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'string':
             case 'FnDef':
             case 'Array':
+            case 'Alias':
             case 'Record':
                 todo(ty.type);
             case 'TyVid':
@@ -1200,12 +1298,23 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     }
                     case 'DerefCopy': {
                         const local = getLocal(stmt.local);
-                        if (local.ty.type !== 'Pointer') throw new Error('derefcopy on non-pointer?');
 
-                        const ty = llTy(local.ty);
-                        const resTy = local.temporary ? llTy(local.ty.pointee) : llTy(local.ty);
+                        let resTy: string;
+                        let srcTy: string;
 
-                        output += `%l.${stmt.assignee} = load ${resTy}, ${ty}${local.temporary ? '' : '*'} %l.${stmt.local}\n`;
+                        if (local.temporary) {
+                            if (local.ty.type !== 'Pointer') {
+                                throw new Error('DerefCopy on non-pointer');
+                            } else {
+                                srcTy = llTy(local.ty);
+                                resTy = llTy(local.ty.pointee);
+                            }
+                        } else {
+                            srcTy = `${llTy(local.ty)}*`;
+                            resTy = llTy(local.ty);
+                        }
+
+                        output += `%l.${stmt.assignee} = load ${resTy}, ${srcTy} %l.${stmt.local}\n`;
                         break;
                     }
                     case 'AddrOfLocal': break; // Processed in `renameAliases`
