@@ -30,6 +30,7 @@ enum TokenType {
     Assign,
     Semi,
     Comma,
+    Mut,
     Number,
     String,
     Plus,
@@ -39,6 +40,8 @@ enum TokenType {
     Dot,
     Lt,
     Gt,
+    And,
+    Or,
 }
 interface Token {
     ty: TokenType;
@@ -83,6 +86,7 @@ function tokenize(src: string): Token[] {
             case '+': tokens.push({ span: [start, i + 1], ty: TokenType.Plus }); break;
             case '-': tokens.push({ span: [start, i + 1], ty: TokenType.Minus }); break;
             case '*': tokens.push({ span: [start, i + 1], ty: TokenType.Star }); break;
+            case '&': tokens.push({ span: [start, i + 1], ty: TokenType.And }); break;
             case '/': {
                 if (src[i + 1] === '/') {
                     while (i < src.length && src[i] !== '\n') i++;
@@ -108,6 +112,7 @@ function tokenize(src: string): Token[] {
                         case 'function': ty = TokenType.Function; break;
                         case 'let': ty = TokenType.Let; break;
                         case 'return': ty = TokenType.Return; break;
+                        case 'mut': ty = TokenType.Mut; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });
@@ -145,6 +150,8 @@ type Expr = { span: Span } & (
     | { type: "Property"; target: Expr; property: string }
     | { type: "Return"; value: Expr }
     | { type: "Binary"; op: TokenType; lhs: Expr; rhs: Expr }
+    | { type: 'AddrOf', pointee: Expr, mtb: Mutability }
+    | { type: 'Deref', pointee: Expr }
 );
 
 
@@ -156,11 +163,18 @@ type FnDecl = {
 };
 
 type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl);
-type AstTy = { type: 'Literal', ident: string } | { type: 'ArrayLiteral', elemTy: AstTy };
+type Mutability = 'imm' | 'mut';
+type AstTy = { type: 'Literal', ident: string } | { type: 'Array', elemTy: AstTy, len: number } | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy };
 type Program = { stmts: Stmt[] };
 type LeftToRight = 'ltr';
 type RightToLeft = 'rtl';
 type Associativity = LeftToRight | RightToLeft;
+
+const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
+    // Somewhere between indexing/dot and multiplicative
+    [TokenType.And]: 15,
+    [TokenType.Star]: 15
+};
 
 const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     // Fn calls `x()`
@@ -227,8 +241,13 @@ function parse(src: string): Program {
 
         while (i < tokens.length) {
             if (eatToken(TokenType.LSquare, false)) {
-                eatToken(TokenType.RSquare);
-                ty = { type: 'ArrayLiteral', elemTy: ty };
+                const len = tokens[i++];
+                if (len.ty !== TokenType.Number) throw new Error('array must have a length component');
+                eatToken(TokenType.RSquare, true);
+                ty = { type: 'Array', elemTy: ty, len: +snip(len.span) };
+            } else if (eatToken(TokenType.Star, false)) {
+                const mtb: Mutability = tokens[i].ty === TokenType.Mut ? (i++, 'mut') : 'imm';
+                ty = { type: 'Pointer', mtb, pointeeTy: ty };
             } else {
                 break;
             }
@@ -250,25 +269,40 @@ function parse(src: string): Program {
 
     function parseExpr(minPrecedence: number): Expr {
         // Unary expressions.
+        let expr: Expr;
         switch (tokens[i].ty) {
             case TokenType.Return: {
-                let returnKwSpan = tokens[i].span;
-                i++;
+                let returnKwSpan = tokens[i++].span;
                 const value = parseRootExpr();
                 return { type: 'Return', span: joinSpan(returnKwSpan, value.span), value };
             }
             case TokenType.LBrace: {
-                const lbraceSpan = tokens[i].span;
-                i++;
+                const lbraceSpan = tokens[i++].span;
                 const stmts = [];
                 while (!eatToken(TokenType.RBrace, false)) {
                     stmts.push(parseStmt());
                 }
                 return { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
             }
+            case TokenType.And: {
+                // Unary &
+                const andSpan = tokens[i++].span;
+                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.And]!);
+
+                expr = { type: 'AddrOf', mtb: 'imm', pointee, span: joinSpan(andSpan, pointee.span) };
+                break;
+            }
+            case TokenType.Star: {
+                // Dereference
+                const starSpan = tokens[i++].span;
+                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.Star]!);
+                expr = { type: 'Deref', pointee, span: joinSpan(starSpan, pointee.span) };
+                break;
+            }
+            default:
+                expr = parseBottomExpr();
         }
 
-        let expr = parseBottomExpr();
 
         while (i < tokens.length) {
             const op = tokens[i];
@@ -435,7 +469,8 @@ function computeResolutions(ast: Program): Resolutions {
                 }
                 break;
             }
-            case 'ArrayLiteral': resolveTy(ty.elemTy); break;
+            case 'Array': resolveTy(ty.elemTy); break;
+            case 'Pointer': resolveTy(ty.pointeeTy); break;
             default: assertUnreachable(ty);
         }
     }
@@ -485,6 +520,12 @@ function computeResolutions(ast: Program): Resolutions {
                 resolveExpr(expr.lhs);
                 resolveExpr(expr.rhs);
                 break;
+            case 'AddrOf':
+                resolveExpr(expr.pointee);
+                break;
+            case 'Deref':
+                resolveExpr(expr.pointee);
+                break;
             default: assertUnreachable(expr);
         }
     }
@@ -522,9 +563,10 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'never' }
     | { type: 'i32' }
     | { type: 'string' }
-    | { type: 'ArrayLiteral', elemTy: Ty }
+    | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentFn: FnDecl }
-    | { type: 'FnDef', decl: FnDecl };
+    | { type: 'FnDef', decl: FnDecl }
+    | { type: 'Pointer', mtb: Mutability, pointee: Ty };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index';
@@ -596,6 +638,22 @@ class Infcx {
     }
 }
 
+function ppTy(ty: Ty): string {
+    switch (ty.type) {
+        case 'i32':
+        case 'never':
+        case 'string':
+        case 'void':
+            return ty.type;
+        case 'Array':
+            return `${ppTy(ty.elemTy)}[${ty.len}]`;
+        case 'Pointer':
+            return `${ppTy(ty.pointee)}*`
+        case 'TyParam': return ty.parentFn.generics[ty.id];
+        case 'TyVid': return `?${ty.id}t`;
+        case 'FnDef': todo('pretty print fndef');
+    }
+}
 
 function error(src: string, span: Span, message: string) {
     let lineStart = src.lastIndexOf('\n', span[0]);
@@ -636,7 +694,9 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         default: assertUnreachable(tyres)
                     }
                 }
-                case 'ArrayLiteral': return { type: 'ArrayLiteral', elemTy: lowerTy(ty.elemTy) };
+                case 'Array': return { type: 'Array', elemTy: lowerTy(ty.elemTy), len: ty.len };
+                case 'Pointer': return { type: 'Pointer', mtb: ty.mtb, pointee: lowerTy(ty.pointeeTy) };
+                default: assertUnreachable(ty);
             }
         }
         lowered = lowerInner(ty);
@@ -687,7 +747,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         elemTy = typeckExpr(expr.elements[0]);
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
                     }
-                    return { type: 'ArrayLiteral', elemTy };
+                    return { type: 'Array', elemTy, len: expr.elements.length };
                 }
                 case 'Assignment': {
                     infcx.sub('Assignment', expr.span, typeckExpr(expr.value), typeckExpr(expr.target));
@@ -696,7 +756,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Index': {
                     infcx.sub('Index', expr.span, typeckExpr(expr.index), { type: 'i32' });
                     const target = typeckExpr(expr.target);
-                    if (target.type === 'ArrayLiteral') {
+                    if (target.type === 'Array') {
                         return target.elemTy;
                     } else {
                         // TODO: constraint for tyvar
@@ -711,6 +771,15 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     infcx.sub('UseInArithmeticOperation', expr.rhs.span, typeckExpr(expr.rhs), { type: 'i32' });
                     return { type: 'i32' };
                 }
+                case 'AddrOf': return { type: 'Pointer', mtb: expr.mtb, pointee: typeckExpr(expr.pointee) };
+                case 'Deref': {
+                    const pointee = typeckExpr(expr.pointee);
+                    if (pointee.type === 'Pointer') {
+                        return pointee.pointee;
+                    } else {
+                        throw `Attempted to dereference non-pointer type ${pointee.type}`;
+                    }
+                };
                 default: todo(expr.type);
             }
         }
@@ -780,14 +849,19 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     return { infcx, loweredTys, exprTys, hadErrors: lub.hadErrors };
 }
 
-type MirValue = { type: 'i32', value: number } | { type: 'Local', value: MirLocalId<true> } | { type: 'Unreachable' };
+type MirValue = { type: 'i32', value: number }
+    | { type: 'Local', value: MirLocalId<true> }
+    | { type: 'Unreachable' };
 /**
  * `temporary` indicates whether this local is used for a subexpression.
  * These are trivially in SSA form and are never written to except when initialized.
  */
 type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary: temporary };
 type MirLocalId<temporary extends boolean = boolean> = number;
-type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValue } | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue } | { type: 'Copy', assignee: MirLocalId<true>, local: MirLocalId<false> };
+type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValue }
+    | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
+    | { type: 'DerefCopy', assignee: MirLocalId<true>, local: MirLocalId<false> }
+    | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> };
 type MirTerminator = { type: 'Return' };
 type MirBlock = {
     stmts: MirStmt[];
@@ -802,12 +876,14 @@ function mangleTy(ty: Ty): string {
         case 'string':
         case 'i32':
             return ty.type;
-        case 'ArrayLiteral':
-            return `$array$${mangleTy(ty.elemTy)}`;
+        case 'Array':
+            return `$array$${ty.len}$${mangleTy(ty.elemTy)}`;
         case 'TyParam':
         case 'TyVid':
         case 'FnDef':
             throw new Error(`attempted to mangle ${ty.type}`);
+        case 'Pointer':
+            return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
         default: assertUnreachable(ty);
     }
 }
@@ -884,7 +960,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const id = astLocalToMirLocal.get(res.valueResolutions.get(expr)! as LetDecl)!;
                     const assignee = addLocal(locals[id].ty, true);
                     block.stmts.push({
-                        type: 'Copy',
+                        type: 'DerefCopy',
                         assignee,
                         local: id
                     });
@@ -905,6 +981,32 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const res = addLocal(typeck.exprTys.get(expr)!, true);
                     block.stmts.push({ type: 'BinOp', assignee: res, lhs, rhs, op: expr.op });
                     return { type: 'Local', value: res };
+                }
+                case 'AddrOf': {
+                    switch (expr.pointee.type) {
+                        case 'Literal':
+                            const lres = res.valueResolutions.get(expr.pointee);
+                            if (lres?.type === 'LetDecl') {
+                                const res = addLocal(typeck.exprTys.get(expr.pointee)!, true);
+                                block.stmts.push({ type: 'AddrOfLocal', assignee: res, local: astLocalToMirLocal.get(lres)! });
+                                return { type: 'Local', value: res };
+                            } else {
+                                throw new Error(`cannot take address of non-local variable`);
+                            }
+                        // TODO: we can const-promote number literals
+                        default: throw new Error(`cannot take address of ${expr.pointee.type}`);
+                    }
+                }
+                case 'Deref': {
+                    const assignee = addLocal(typeck.exprTys.get(expr)!, true);
+                    const op = lowerExpr(expr.pointee);
+                    if (op.type !== 'Local') throw new Error('deref pointee must be a local in mir');
+                    block.stmts.push({
+                        type: 'DerefCopy',
+                        assignee,
+                        local: op.value
+                    });
+                    return { type: 'Local', value: assignee };
                 }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
@@ -933,10 +1035,12 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
         switch (ty.type) {
             case 'i32': return 'i32';
             case 'void': return 'void';
+            case 'Pointer':
+                return `${llTy(ty.pointee)}*`;
             case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
             case 'string':
             case 'FnDef':
-            case 'ArrayLiteral':
+            case 'Array':
                 todo(ty.type);
             case 'TyVid':
             case 'never':
@@ -971,14 +1075,48 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
         }
     }
 
+    function renameAliases(mir: MirBody) {
+        const aliasGraph = new Map<MirLocalId, MirLocalId>();
+        function processStmtOrTerm(s: MirStmt | MirTerminator) {
+            function patchObjKey<K extends string>(o: Record<K, MirLocalId>, p: K) {
+                while (aliasGraph.has(o[p])) {
+                    o[p] = aliasGraph.get(o[p])!;
+                }
+            }
+            function patchValue(val: MirValue) {
+                if (val.type === 'Local') patchObjKey(val, 'value');
+            }
+            switch (s.type) {
+                case 'AddrOfLocal': aliasGraph.set(s.assignee, s.local); break;
+                case 'Assignment': patchObjKey(s, 'assignee'); patchValue(s.value); break;
+                case 'BinOp':
+                    patchObjKey(s, 'assignee');
+                    patchValue(s.lhs);
+                    patchValue(s.rhs);
+                    break;
+                case 'DerefCopy':
+                    patchObjKey(s, 'assignee');
+                    patchObjKey(s, 'local');
+                    break;
+                case 'Return': break;
+                default: assertUnreachable(s);
+            }
+        }
+        for (const block of mir.blocks) {
+            for (const stmt of block.stmts) processStmtOrTerm(stmt);
+            if (block.terminator) processStmtOrTerm(block.terminator);
+        }
+    }
+
     function codegenFn(decl: FnDecl, args: Ty[]) {
         const mangledName = mangleInstFn(decl, args);
 
         let _temps = 0;
         let tempLocal = () => _temps++;
         const mir = astToMir(src, mangledName, decl, args, res, typeck);
+        renameAliases(mir);
         const getLocal = <temporary extends boolean>(id: MirLocalId<temporary>): MirLocal<temporary> => {
-            return mir.locals[id] as MirLocal<temporary>;
+            return mirLocal(mir, id);
         };
 
         const ret = typeck.loweredTys.get(decl.ret)!;
@@ -1012,7 +1150,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 const stmt = block.stmts[j];
                 switch (stmt.type) {
                     case 'Assignment': {
-                        const local = mirLocal(mir, stmt.assignee);
+                        const local = getLocal(stmt.assignee);
                         output += `store ${llValTy(mir, stmt.value)} ${llValue(stmt.value)}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
                         break;
                     }
@@ -1020,16 +1158,24 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         let binOp: string;
                         switch (stmt.op) {
                             case TokenType.Plus: binOp = 'add'; break;
+                            case TokenType.Minus: binOp = 'sub'; break;
+                            case TokenType.Star: binOp = 'mul'; break;
                             default: todo('BinOp ' + stmt.op);
                         }
                         output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${llValue(stmt.lhs)}, ${llValue(stmt.rhs)}\n`;
                         break;
                     }
-                    case 'Copy': {
-                        const ty = llTy(getLocal(stmt.local).ty);
-                        output += `%l.${stmt.assignee} = load ${ty}, ${ty}* %l.${stmt.local}\n`;
+                    case 'DerefCopy': {
+                        const local = getLocal(stmt.local);
+                        if (local.ty.type !== 'Pointer') throw new Error('derefcopy on non-pointer?');
+
+                        const ty = llTy(local.ty);
+                        const resTy = local.temporary ? llTy(local.ty.pointee) : llTy(local.ty);
+
+                        output += `%l.${stmt.assignee} = load ${resTy}, ${ty}${local.temporary ? '' : '*'} %l.${stmt.local}\n`;
                         break;
                     }
+                    case 'AddrOfLocal': break; // Processed in `renameAliases`
                     default: assertUnreachable(stmt);
                 }
             }
