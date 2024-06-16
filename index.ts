@@ -190,7 +190,7 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
 
 function parse(src: string): Program {
     const tokens = tokenize(src);
-    const stmts: any = [];
+    const stmts: Stmt[] = [];
     let i = 0;
 
     function snip(span: Span) {
