@@ -660,6 +660,7 @@ function computeResolutions(ast: Program): Resolutions {
     return { tyResolutions: tyMap, valueResolutions: identMap, entrypoint };
 }
 
+type RecordType = { type: 'Record', fields: RecordFields<Ty> };
 type Ty = { type: 'TyVid', id: number }
     | { type: 'void' }
     | { type: 'never' }
@@ -669,7 +670,7 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'TyParam', id: number, parentFn: FnDecl }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
-    | { type: 'Record', fields: RecordFields<Ty> }
+    | RecordType
     | { type: 'Alias', decl: TyAliasDecl, alias: Ty };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
@@ -732,6 +733,13 @@ class Infcx {
         fs.returnFound = true;
         const sup = fs.expectedReturnTy;
         this.sub('Return', at, ty, sup);
+    }
+
+    normalize(ty: Ty): Ty {
+        while (ty.type === 'Alias') {
+            ty = ty.alias;
+        }
+        return ty;
     }
 
     tryResolve(ty: Ty): Ty {
@@ -918,25 +926,62 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     }
 
     function computeLUBTypes(): LUBResult {
+        let errors = false;
+        let madeProgress = true;
+
         const constrainVid = (vid: number, ty: Ty) => {
             infcx.tyVars[vid].constrainedTy = ty;
             exprTys.set(infcx.tyVars[vid].origin.expr, ty);
+            madeProgress = true;
         };
-        let errors = false;
 
-        while (true) {
-            for (let i = 0; i < infcx.constraints.length; i++) {
-                const constraint = infcx.constraints[i];
+        while (madeProgress) {
+            madeProgress = false;
+            for (let i = infcx.constraints.length - 1; i >= 0; i--) {
+                const constraint = infcx.constraints.pop()!;
                 const sub = infcx.tryResolve(constraint.sub);
                 const sup = infcx.tryResolve(constraint.sup);
+
+                function subFields(sub: RecordType, sup: RecordType) {
+                    if (sub.fields.length !== sup.fields.length) {
+                        // Fast fail: no point in comparing fields when they lengths don't match.
+                        error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
+                    } else {
+                        for (const [k1, v1] of sub.fields) {
+                            const supf = sup.fields.find(([k2]) => k1 === k2);
+                            if (supf) {
+                                infcx.constraints.push({ at: constraint.at, cause: constraint.cause, sub: v1, sup: supf[1], type: 'SubtypeOf' })
+                            } else {
+                                error(src, constraint.at, `type error: no field '${k1}' in '${ppTy(sup)}'`);
+                            }
+                        }
+                        madeProgress = true;
+                    }
+                }
 
                 switch (constraint.type) {
                     case 'SubtypeOf':
                         if (sub.type === 'i32' && sup.type === 'i32') {
                             // OK
+                        } else if (sub.type === 'Record' && sup.type === 'Record') {
+                            subFields(sub, sup);
+                        } else if (sub.type === 'Record' && sup.type === 'Alias') {
+                            const nsup = infcx.normalize(sup);
+                            if (nsup.type === 'Record') {
+                                if (
+                                    sup.decl.constructibleIn.length > 0
+                                    // Can only unify if the constraint was added in any of the specified functions.
+                                    // TODO: actually check this. figure out how to get the parentFn here
+                                    && !sup.decl.constructibleIn.some((v) => true)
+                                ) {
+                                    error(src, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
+                                }
+                                subFields(sub, nsup);
+                            }
                         } else if (sub.type === 'TyVid') {
                             if (sup.type === 'TyVid') {
-                                // Can't progress.
+                                // Can't progress. Re-add for later.
+                                infcx.constraints.push(constraint);
                             } else {
                                 constrainVid(sub.id, sup);
                             }
@@ -948,7 +993,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             let message: string;
                             switch (constraint.cause) {
                                 case 'UseInArithmeticOperation':
-                                    message = `cannot add '${sub.type}' to '${sup.type}'`;
+                                    message = `cannot add ${sub.type} to ${sup.type}`;
                                     break;
                                 default: message = `${ppTy(sub)} is not a subtype of ${ppTy(sup)} (reason: '${constraint.cause}')`;
                             }
@@ -960,7 +1005,10 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     default: assertUnreachable(constraint.type)
                 }
             }
-            break;
+        }
+
+        if (infcx.constraints.length > 0) {
+            throw new Error('LUB compute got stuck making no progress but there are still constraints!');
         }
 
         return { hadErrors: errors }
