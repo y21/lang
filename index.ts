@@ -533,7 +533,7 @@ enum PrimitiveTy {
     Never,
     I32,
 }
-type TyParamResolution = { type: 'TyParam', id: number, parentFn: FnDecl };
+type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl };
 type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
 type ValueResolution = FnDecl | LetDecl | ({ type: 'FnParam', param: FnParameter });
@@ -590,13 +590,19 @@ function computeResolutions(ast: Program): Resolutions {
             }
             case 'TyAlias': {
                 tyRes.add(stmt.name, stmt);
-                resolveTy(stmt.alias);
-                for (const path of stmt.constructibleIn) {
-                    if (path.segments.length !== 1) throw 'wrong segment length';
-                    for (const args of path.segments[0].args) {
-                        resolveTy(args.ty);
+                tyRes.withScope(() => {
+                    for (let i = 0; i < stmt.generics.length; i++) {
+                        tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
                     }
-                }
+
+                    resolveTy(stmt.alias);
+                    for (const path of stmt.constructibleIn) {
+                        if (path.segments.length !== 1) throw 'wrong segment length';
+                        for (const args of path.segments[0].args) {
+                            resolveTy(args.ty);
+                        }
+                    }
+                });
                 break;
             }
             default: assertUnreachable(stmt);
@@ -655,7 +661,7 @@ function computeResolutions(ast: Program): Resolutions {
         valRes.withScope(() => {
             tyRes.withScope(() => {
                 for (let i = 0; i < decl.generics.length; i++) {
-                    tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentFn: decl });
+                    tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentItem: decl });
                 }
 
                 for (const param of decl.parameters) {
@@ -694,7 +700,7 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'i32' }
     | { type: 'string' }
     | { type: 'Array', elemTy: Ty, len: number }
-    | { type: 'TyParam', id: number, parentFn: FnDecl }
+    | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
@@ -810,7 +816,7 @@ function ppTy(ty: Ty): string {
             return `${ppTy(ty.elemTy)}[${ty.len}]`;
         case 'Pointer':
             return `${ppTy(ty.pointee)}*`
-        case 'TyParam': return ty.parentFn.generics[ty.id];
+        case 'TyParam': return ty.parentItem.generics[ty.id];
         case 'TyVid': return `?${ty.id}t`;
         case 'FnDef': todo('pretty print fndef');
         case 'Record': {
@@ -856,7 +862,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Path': {
                     const tyres = res.tyResolutions.get(ty)!;
                     switch (tyres.type) {
-                        case 'TyParam': return { type: 'TyParam', id: tyres.id, parentFn: tyres.parentFn };
+                        case 'TyParam': return { type: 'TyParam', id: tyres.id, parentItem: tyres.parentItem };
                         case 'Primitive': switch (tyres.kind) {
                             case PrimitiveTy.Void: return { type: 'void' };
                             case PrimitiveTy.Never: return { type: 'never' };
@@ -1026,7 +1032,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
         if (t.type === 'TyVid') {
             // Type variables are later inserted when the least-upper type is computed based on the constraints.
             infcx.deferExprTy(t, expr);
-        } {
+        } else {
             infcx.exprTys.set(expr, t);
         }
         return t;
