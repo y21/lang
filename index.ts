@@ -1,5 +1,10 @@
 import fs from 'fs';
 import cProcess from 'child_process';
+import { inspect as _inspect } from 'util';
+
+function inspect(v: any): string {
+    return _inspect(v, { depth: Infinity, colors: true });
+}
 
 function assertUnreachable(v: never): never {
     throw 'impossible';
@@ -166,9 +171,11 @@ type FnDecl = {
     type: 'FnDecl',
     name: string,
     generics: Generics,
+    parameters: FnParameter[],
     ret: AstTy,
     body: Expr
 };
+type FnParameter = { name: string, ty: AstTy };
 type Generics = string[];
 type TyAliasDecl = { type: 'TyAlias', name: string, generics: Generics, constructibleIn: Path<AstTy>[], alias: AstTy };
 type GenericArg<Ty> = { type: 'Type', ty: Ty };
@@ -429,10 +436,16 @@ function parse(src: string): Program {
                 i++;
                 const name = expectIdent();
                 const generics = parseGenericsList();
+                const parameters: FnParameter[] = [];
 
                 eatToken(TokenType.LParen);
-                // TODO: params
-                eatToken(TokenType.RParen);
+                while (!eatToken(TokenType.RParen, false)) {
+                    eatToken(TokenType.Comma, false);
+                    const name = expectIdent();
+                    eatToken(TokenType.Colon);
+                    const ty = parseTy();
+                    parameters.push({ name, ty });
+                }
 
                 eatToken(TokenType.Colon);
 
@@ -444,6 +457,7 @@ function parse(src: string): Program {
                     span: body.span, // TODO: wrong span
                     name,
                     generics,
+                    parameters,
                     ret,
                     body
                 };
@@ -522,7 +536,7 @@ enum PrimitiveTy {
 type TyParamResolution = { type: 'TyParam', id: number, parentFn: FnDecl };
 type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
-type ValueResolution = FnDecl | LetDecl;
+type ValueResolution = FnDecl | LetDecl | ({ type: 'FnParam', param: FnParameter });
 type ValueResolutions = Map<Expr, ValueResolution>;
 type Resolutions = { tyResolutions: TypeResolutions, valueResolutions: ValueResolutions, entrypoint: FnDecl };
 
@@ -577,6 +591,12 @@ function computeResolutions(ast: Program): Resolutions {
             case 'TyAlias': {
                 tyRes.add(stmt.name, stmt);
                 resolveTy(stmt.alias);
+                for (const path of stmt.constructibleIn) {
+                    if (path.segments.length !== 1) throw 'wrong segment length';
+                    for (const args of path.segments[0].args) {
+                        resolveTy(args.ty);
+                    }
+                }
                 break;
             }
             default: assertUnreachable(stmt);
@@ -632,13 +652,20 @@ function computeResolutions(ast: Program): Resolutions {
 
     function resolveFnDecl(decl: FnDecl) {
         valRes.add(decl.name, decl);
-        tyRes.withScope(() => {
-            for (let i = 0; i < decl.generics.length; i++) {
-                tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentFn: decl });
-            }
+        valRes.withScope(() => {
+            tyRes.withScope(() => {
+                for (let i = 0; i < decl.generics.length; i++) {
+                    tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentFn: decl });
+                }
 
-            resolveTy(decl.ret);
-            resolveExpr(decl.body);
+                for (const param of decl.parameters) {
+                    valRes.add(param.name, { type: 'FnParam', param });
+                    resolveTy(param.ty);
+                }
+
+                resolveTy(decl.ret);
+                resolveExpr(decl.body);
+            });
         });
     }
 
@@ -674,24 +701,31 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'Alias', decl: TyAliasDecl, alias: Ty };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index';
+type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument';
 type Constraint = { cause: ConstraintCause, at: Span } & ConstraintType;
 
 type FnLocalState = {
     expectedReturnTy: Ty;
     returnFound: boolean;
-    localTypes: Map<LetDecl, Ty>;
+    localTypes: Map<LetDecl | FnParameter, Ty>;
 };
 
 type TypeckResults = {
     infcx: Infcx,
     loweredTys: Map<AstTy, Ty>,
+    instantiatedFnSigs: Map<Expr, InstantiatedFnSig>,
     exprTys: Map<Expr, Ty>,
     hadErrors: boolean
 };
 
+type InstantiatedFnSig = {
+    parameters: Ty[],
+    ret: Ty,
+    args: Ty[]
+};
+
 type InfTyVar = { constrainedTy: Ty | null, origin: TyVarOrigin };
-type TyVarOrigin = { type: 'Expr', expr: Expr };
+type TyVarOrigin = { type: 'Expr', expr: Expr } | { type: 'GenericArg' };
 type LUBResult = { hadErrors: boolean };
 
 class Infcx {
@@ -711,8 +745,8 @@ class Infcx {
         return { type: 'TyVid', id };
     }
 
-    withFn(expect: Ty, f: () => void) {
-        this.fnStack.push({ expectedReturnTy: expect, returnFound: false, localTypes: new Map() });
+    withFn(expect: Ty, localTypes: Map<LetDecl | FnParameter, Ty>, f: () => void) {
+        this.fnStack.push({ expectedReturnTy: expect, returnFound: false, localTypes });
         f();
         const { expectedReturnTy, returnFound } = this.fnStack.pop()!;
         if (expectedReturnTy.type !== 'void' && !returnFound) {
@@ -724,7 +758,7 @@ class Infcx {
         this.fnStack[this.fnStack.length - 1].localTypes.set(decl, ty);
     }
 
-    localTy(decl: LetDecl): Ty | undefined {
+    localTy(decl: LetDecl | FnParameter): Ty | undefined {
         return this.fnStack[this.fnStack.length - 1].localTypes.get(decl);
     }
 
@@ -797,6 +831,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
     const exprTys = new Map<Expr, Ty>();
+    const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
 
     function lowerTy(ty: AstTy): Ty {
         let lowered = loweredTys.get(ty);
@@ -832,7 +867,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
     function typeckFn(decl: FnDecl) {
         const ret = lowerTy(decl.ret);
-        infcx.withFn(ret, () => { typeckExpr(decl.body); });
+        const locals = new Map();
+        infcx.withFn(ret, locals, () => { typeckExpr(decl.body); });
     }
 
     function typeckStmt(stmt: Stmt) {
@@ -858,6 +894,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     switch (litres.type) {
                         case 'FnDecl': return { type: 'FnDef', decl: litres };
                         case 'LetDecl': return infcx.localTy(litres)!;
+                        case 'FnParam': return lowerTy(litres.param.ty);
                         default: assertUnreachable(litres);
                     }
                 }
@@ -914,6 +951,55 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
                     return { type: 'Record', fields };
                 }
+                case 'FnCall': {
+                    // NOTE: This only instantiates the header (signature), not the whole body.
+                    function instantiateFnSig(def: FnDecl, args: Ty[]): InstantiatedFnSig {
+                        if (args.length !== def.generics.length) {
+                            throw new Error(`attempted to instantiate fn sig with wrong generic arg count (${args.length} != ${def.generics.length})`);
+                        }
+
+                        const remapTy = (ty: AstTy) => {
+                            // TODO!!!: this should look for nested typarams, ie `Vec<T>`
+                            const lowered = lowerTy(ty);
+                            if (lowered.type === 'TyParam') {
+                                return args[lowered.id];
+                            } else {
+                                return lowered;
+                            }
+                        };
+
+                        return {
+                            parameters: def.parameters.map(p => remapTy(p.ty)),
+                            ret: remapTy(def.ret),
+                            args
+                        }
+                    }
+
+                    const sig = (() => {
+                        const callee = typeckExpr(expr.callee);
+                        if (callee.type !== 'FnDef') {
+                            throw new Error('callee must be a FnDef');
+                        }
+                        const genericArgs = [];
+                        for (let i = 0; i < callee.decl.generics.length; i++) {
+                            genericArgs.push(infcx.mkTyVar({ type: 'GenericArg' }));
+                        }
+                        return instantiateFnSig(callee.decl, genericArgs);
+                    })();
+                    instantiatedFnSigs.set(expr, sig);
+
+                    const expectedCount = sig.parameters.length;
+                    const gotCount = expr.args.length;
+                    if (gotCount !== expectedCount) {
+                        throw new Error(`mismatched number of arguments; expected ${expectedCount}, got ${gotCount}`);
+                    }
+
+                    for (let i = 0; i < gotCount; i++) {
+                        infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i]);
+                    }
+
+                    return sig.ret;
+                }
                 default: todo(expr.type);
             }
         }
@@ -931,7 +1017,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
         const constrainVid = (vid: number, ty: Ty) => {
             infcx.tyVars[vid].constrainedTy = ty;
-            exprTys.set(infcx.tyVars[vid].origin.expr, ty);
+            // TODO: is it bad that we are discarding GenericArgs here?...
+            const origin = infcx.tyVars[vid].origin;
+            if (origin.type === 'Expr') {
+                exprTys.set(origin.expr, ty);
+            }
             madeProgress = true;
         };
 
@@ -1020,12 +1110,13 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
     const lub = computeLUBTypes();
 
-    return { infcx, loweredTys, exprTys, hadErrors: lub.hadErrors };
+    return { infcx, loweredTys, exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
 }
 
 type MirValue = { type: 'i32', value: number }
     | { type: 'Local', value: MirLocalId<true> }
-    | { type: 'Unreachable' };
+    | { type: 'Unreachable' }
+    | { type: 'FnDef', value: FnDecl };
 /**
  * `temporary` indicates whether this local is used for a subexpression.
  * These are trivially in SSA form and are never written to except when initialized.
@@ -1036,12 +1127,14 @@ type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValu
     | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
     | { type: 'DerefCopy', assignee: MirLocalId<true>, local: MirLocalId<false> }
     | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> };
-type MirTerminator = { type: 'Return' };
+type MirTerminator = { type: 'Return' }
+    | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId };
 type MirBlock = {
     stmts: MirStmt[];
     terminator: MirTerminator | null;
 };
-type MirBody = { blocks: MirBlock[], locals: MirLocal[] };
+type MirBlockId = number;
+type MirBody = { blocks: MirBlock[], parameters: MirLocalId<false>[], locals: MirLocal[] };
 
 function mangleTy(ty: Ty): string {
     switch (ty.type) {
@@ -1092,10 +1185,10 @@ function mangleInstFn(decl: FnDecl, args: Ty[]): string {
  */
 const _mirBodyCache = new Map<string, MirBody>();
 function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], res: Resolutions, typeck: TypeckResults): MirBody {
-    function lowerMir() {
+    function lowerMir(): MirBody {
         if (decl.body.type !== 'Block') throw `${decl.name} did not have a block as its body?`;
 
-        const astLocalToMirLocal = new Map<LetDecl, MirLocalId<false>>();
+        const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
         const locals: MirLocal[] = [
             // _0 = return place
             { ty: typeck.loweredTys.get(decl.ret)!, temporary: false }
@@ -1113,6 +1206,13 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             }
         ];
         let block = blocks[0];
+
+        const parameters = [];
+        for (const param of decl.parameters) {
+            const local = addLocal(typeck.loweredTys.get(param.ty)!, false);
+            parameters.push(local);
+            astLocalToMirLocal.set(param, local);
+        }
 
         function lowerStmt(stmt: Stmt) {
             switch (stmt.type) {
@@ -1134,14 +1234,28 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             switch (expr.type) {
                 case 'Number': return { type: 'i32', value: expr.value };
                 case 'Literal': {
-                    const id = astLocalToMirLocal.get(res.valueResolutions.get(expr)! as LetDecl)!;
-                    const assignee = addLocal(locals[id].ty, true);
-                    block.stmts.push({
-                        type: 'DerefCopy',
-                        assignee,
-                        local: id
-                    });
-                    return { type: 'Local', value: assignee };
+                    const resolution = res.valueResolutions.get(expr)!;
+                    switch (resolution.type) {
+                        case 'FnDecl': {
+                            return {
+                                type: 'FnDef',
+                                value: resolution
+                            };
+                        };
+                        case 'FnParam':
+                        case 'LetDecl': {
+                            const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
+                            const assignee = addLocal(locals[id].ty, true);
+                            block.stmts.push({
+                                type: 'DerefCopy',
+                                assignee,
+                                local: id
+                            });
+
+                            return { type: 'Local', value: assignee };
+                        }
+                        default: assertUnreachable(resolution);
+                    }
                 }
                 case 'Return': {
                     const ret = lowerExpr(expr.value);
@@ -1185,6 +1299,24 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     });
                     return { type: 'Local', value: assignee };
                 }
+                case 'FnCall': {
+                    const callee = lowerExpr(expr.callee);
+                    if (callee.type !== 'FnDef') {
+                        throw new Error('callee must be a FnDef');
+                    }
+                    const sig = typeck.instantiatedFnSigs.get(expr)!;
+                    const res = addLocal(sig.ret, true);
+
+                    const args = expr.args.map(lowerExpr);
+
+                    const targetBlock = blocks.length;
+                    blocks.push({ stmts: [], terminator: null });
+
+                    block.terminator = { type: 'Call', args, assignee: res, decl: callee.value, sig, target: targetBlock };
+                    block = blocks[targetBlock];
+
+                    return { type: 'Local', value: res };
+                }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
         }
@@ -1195,7 +1327,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
 
         return {
             locals,
-            blocks
+            blocks,
+            parameters
         };
     }
 
@@ -1208,6 +1341,9 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
 }
 
 function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResults) {
+    const _codegenCache = new Set<string>();
+    let fnSection = '';
+
     function llTy(ty: Ty): string {
         switch (ty.type) {
             case 'i32': return 'i32';
@@ -1236,6 +1372,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'Local': return `%l.${val.value}`;
             case 'i32': return val.value.toString();
             case 'Unreachable': return 'poison';
+            case 'FnDef': throw new Error('FnDef values need to be treated specially');
         }
     }
 
@@ -1251,6 +1388,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             }
             case 'i32': return 'i32';
             case 'Unreachable': todo('unreachable ty');
+            case 'FnDef': throw new Error('FnDef values need to be treated specially');
         }
     }
 
@@ -1278,6 +1416,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     patchObjKey(s, 'local');
                     break;
                 case 'Return': break;
+                case 'Call':
+                    s.args.forEach(patchValue);
+                    break;
                 default: assertUnreachable(s);
             }
         }
@@ -1288,110 +1429,133 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
     }
 
     function codegenFn(decl: FnDecl, args: Ty[]) {
-        const mangledName = mangleInstFn(decl, args);
+        function inner(decl: FnDecl, args: Ty[]) {
+            let _temps = 0;
+            let tempLocal = () => _temps++;
+            const mir = astToMir(src, mangledName, decl, args, res, typeck);
+            renameAliases(mir);
 
-        let _temps = 0;
-        let tempLocal = () => _temps++;
-        const mir = astToMir(src, mangledName, decl, args, res, typeck);
-        renameAliases(mir);
-        const getLocal = <temporary extends boolean>(id: MirLocalId<temporary>): MirLocal<temporary> => {
-            return mirLocal(mir, id);
-        };
+            const getLocal = <temporary extends boolean>(id: MirLocalId<temporary>): MirLocal<temporary> => {
+                return mirLocal(mir, id);
+            };
 
-        const ret = typeck.loweredTys.get(decl.ret)!;
-        assert(mir.locals[0].ty === ret, 'return type and return local\'s type must match');
+            const ret = typeck.loweredTys.get(decl.ret)!;
+            assert(mir.locals[0].ty === ret, 'return type and return local\'s type must match');
 
-        let output = `define ${llTy(ret)} @${mangledName}() {\n`;
-        let writeBB = (name: string) => output += name + ':\n';
+            const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
 
-        // Prologue: alloca locals for explicit, real locals
-        // (temporary locals are created on the fly)
-        writeBB('prologue');
-        for (let i = 0; i < mir.locals.length; i++) {
-            const local = mir.locals[i];
-            if (!local.temporary) {
-                output += `%l.${i} = alloca ${llTy(local.ty)}\n`;
+            let output = `define ${llTy(ret)} @${mangledName}(${parameterList}) {\n`;
+            let writeBB = (name: string) => output += name + ':\n';
+
+            // Prologue: alloca locals for explicit, real locals
+            // (temporary locals are created on the fly)
+            writeBB('prologue');
+            for (let i = 0; i < mir.locals.length; i++) {
+                const local = mir.locals[i];
+                if (!local.temporary) {
+                    output += `%l.${i} = alloca ${llTy(local.ty)}\n`;
+                }
             }
-        }
-        output += 'br label %bb.0\n';
-
-        // Begin codegening real blocks
-        for (let i = 0; i < mir.blocks.length; i++) {
-            const block = mir.blocks[i];
-            if (block.stmts.length === 0) {
-                continue;
+            // Also copy the SSA parameters into alloca'd locals
+            for (const param of mir.parameters) {
+                const local = getLocal(param);
+                output += `store ${llTy(local.ty)} %lt.${param}, ${llTy(local.ty)}* %l.${param}\n`;
             }
 
-            output += '\n';
-            writeBB(`bb.${i}`);
+            output += 'br label %bb.0\n';
 
-            for (let j = 0; j < block.stmts.length; j++) {
-                const stmt = block.stmts[j];
-                switch (stmt.type) {
-                    case 'Assignment': {
-                        const local = getLocal(stmt.assignee);
-                        output += `store ${llValTy(mir, stmt.value)} ${llValue(stmt.value)}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
-                        break;
-                    }
-                    case 'BinOp': {
-                        let binOp: string;
-                        switch (stmt.op) {
-                            case TokenType.Plus: binOp = 'add'; break;
-                            case TokenType.Minus: binOp = 'sub'; break;
-                            case TokenType.Star: binOp = 'mul'; break;
-                            default: todo('BinOp ' + stmt.op);
+            // Begin codegening real blocks
+            for (let i = 0; i < mir.blocks.length; i++) {
+                const block = mir.blocks[i];
+                if (block.stmts.length === 0) {
+                    continue;
+                }
+
+                output += '\n';
+                writeBB(`bb.${i}`);
+
+                for (let j = 0; j < block.stmts.length; j++) {
+                    const stmt = block.stmts[j];
+                    switch (stmt.type) {
+                        case 'Assignment': {
+                            const local = getLocal(stmt.assignee);
+                            output += `store ${llValTy(mir, stmt.value)} ${llValue(stmt.value)}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
+                            break;
                         }
-                        output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${llValue(stmt.lhs)}, ${llValue(stmt.rhs)}\n`;
-                        break;
-                    }
-                    case 'DerefCopy': {
-                        const local = getLocal(stmt.local);
-
-                        let resTy: string;
-                        let srcTy: string;
-
-                        if (local.temporary) {
-                            if (local.ty.type !== 'Pointer') {
-                                throw new Error('DerefCopy on non-pointer');
-                            } else {
-                                srcTy = llTy(local.ty);
-                                resTy = llTy(local.ty.pointee);
+                        case 'BinOp': {
+                            let binOp: string;
+                            switch (stmt.op) {
+                                case TokenType.Plus: binOp = 'add'; break;
+                                case TokenType.Minus: binOp = 'sub'; break;
+                                case TokenType.Star: binOp = 'mul'; break;
+                                default: todo('BinOp ' + stmt.op);
                             }
-                        } else {
-                            srcTy = `${llTy(local.ty)}*`;
-                            resTy = llTy(local.ty);
+                            output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${llValue(stmt.lhs)}, ${llValue(stmt.rhs)}\n`;
+                            break;
                         }
+                        case 'DerefCopy': {
+                            const local = getLocal(stmt.local);
 
-                        output += `%l.${stmt.assignee} = load ${resTy}, ${srcTy} %l.${stmt.local}\n`;
-                        break;
+                            let resTy: string;
+                            let srcTy: string;
+
+                            if (local.temporary) {
+                                if (local.ty.type !== 'Pointer') {
+                                    throw new Error('DerefCopy on non-pointer');
+                                } else {
+                                    srcTy = llTy(local.ty);
+                                    resTy = llTy(local.ty.pointee);
+                                }
+                            } else {
+                                srcTy = `${llTy(local.ty)}*`;
+                                resTy = llTy(local.ty);
+                            }
+
+                            output += `%l.${stmt.assignee} = load ${resTy}, ${srcTy} %l.${stmt.local}\n`;
+                            break;
+                        }
+                        case 'AddrOfLocal': break; // Processed in `renameAliases`
+                        default: assertUnreachable(stmt);
                     }
-                    case 'AddrOfLocal': break; // Processed in `renameAliases`
-                    default: assertUnreachable(stmt);
+                }
+
+                // Process terminator
+                const terminator = block.terminator;
+                if (terminator) {
+                    switch (terminator.type) {
+                        case 'Return':
+                            const temp = tempLocal();
+                            output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
+                            output += `ret ${llTy(ret)} %ret.${temp}`;
+                            break;
+                        case 'Call':
+                            const calleeMangled = mangleInstFn(terminator.decl, terminator.sig.args);
+                            codegenFn(terminator.decl, terminator.sig.args);
+                            const argList = terminator.args.map(arg => `${llValTy(mir, arg)} ${llValue(arg)}`).join(', ');
+                            output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${calleeMangled}(${argList})\n`;
+                            output += `br label %bb.${terminator.target}`;
+                            break;
+                        default: assertUnreachable(terminator)
+                    }
                 }
             }
 
-            // Process terminator
-            const terminator = block.terminator;
-            if (terminator) {
-                switch (terminator.type) {
-                    case 'Return':
-                        const temp = tempLocal();
-                        output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
-                        output += `ret ${llTy(ret)} %ret.${temp}`;
-                        break;
-                    default: assertUnreachable(terminator.type)
-                }
-            }
+
+            output += '\n}\n\n';
+
+            return output;
         }
 
-
-        output += '\n}';
-
-        return output;
+        const mangledName = mangleInstFn(decl, args);
+        if (_codegenCache.has(mangledName)) return;
+        _codegenCache.add(mangledName);
+        const code = inner(decl, args)
+        fnSection += code;
     }
 
     // TODO: validate entrypoint fn? like no generics etc?
-    return codegenFn(res.entrypoint, []);
+    codegenFn(res.entrypoint, []);
+    return fnSection;
 }
 
 function timed<T>(what: string, f: () => T): T {
