@@ -724,14 +724,21 @@ type InstantiatedFnSig = {
     args: Ty[]
 };
 
-type InfTyVar = { constrainedTy: Ty | null, origin: TyVarOrigin };
-type TyVarOrigin = { type: 'Expr', expr: Expr } | { type: 'GenericArg' };
+type InfTyVar = {
+    constrainedTy: Ty | null,
+    // When constraining this inference variable to a concrete type, then we may need to insert new types into the `exprTys` map
+    deferredExprs: Expr[],
+    // Same as with `deferredExprs`, but will replace any affected inference variables in this `InstantiatedFnSig`
+    dereferredInsts: InstantiatedFnSig[]
+};
+type TyVarOrigin = { type: 'Expr' } | { type: 'GenericArg' };
 type LUBResult = { hadErrors: boolean };
 
 class Infcx {
     tyVars: Array<InfTyVar> = [];
     constraints: Constraint[] = [];
     fnStack: FnLocalState[] = [];
+    exprTys = new Map<Expr, Ty>();
 
     constructor() { }
 
@@ -739,9 +746,9 @@ class Infcx {
         this.constraints.push({ type: 'SubtypeOf', at, cause, sub, sup });
     }
 
-    mkTyVar(origin: TyVarOrigin): Ty {
+    mkTyVar(_origin: TyVarOrigin): Ty {
         const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, origin });
+        this.tyVars.push({ constrainedTy: null, deferredExprs: [], dereferredInsts: [] });
         return { type: 'TyVid', id };
     }
 
@@ -774,6 +781,14 @@ class Infcx {
             ty = ty.alias;
         }
         return ty;
+    }
+
+    deferExprTy(ty: { type: 'TyVid', id: number }, expr: Expr) {
+        this.tyVars[ty.id].deferredExprs.push(expr);
+    }
+
+    deferInstSig(ty: { type: 'TyVid', id: number }, sig: InstantiatedFnSig) {
+        this.tyVars[ty.id].dereferredInsts.push(sig);
     }
 
     tryResolve(ty: Ty): Ty {
@@ -830,7 +845,6 @@ function error(src: string, span: Span, message: string) {
 function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
-    const exprTys = new Map<Expr, Ty>();
     const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
 
     function lowerTy(ty: AstTy): Ty {
@@ -906,7 +920,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'ArrayLiteral': {
                     let elemTy: Ty;
                     if (expr.elements.length === 0) {
-                        elemTy = infcx.mkTyVar({ type: "Expr", expr });
+                        elemTy = infcx.mkTyVar({ type: "Expr" });
                     } else {
                         elemTy = typeckExpr(expr.elements[0]);
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
@@ -982,7 +996,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         }
                         const genericArgs = [];
                         for (let i = 0; i < callee.decl.generics.length; i++) {
-                            genericArgs.push(infcx.mkTyVar({ type: 'GenericArg' }));
+                            const tv = infcx.mkTyVar({ type: 'GenericArg' });
+                            genericArgs.push(tv);
                         }
                         return instantiateFnSig(callee.decl, genericArgs);
                     })();
@@ -995,6 +1010,10 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
 
                     for (let i = 0; i < gotCount; i++) {
+                        const paramTy = sig.parameters[i];
+                        if (paramTy.type === 'TyVid') {
+                            infcx.deferInstSig(paramTy, sig);
+                        }
                         infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i]);
                     }
 
@@ -1004,9 +1023,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             }
         }
         const t = inner(expr);
-        // Type variables are later inserted when an upper type is computed based on the constraints.
-        if (t.type !== 'TyVid') {
-            exprTys.set(expr, t);
+        if (t.type === 'TyVid') {
+            // Type variables are later inserted when the least-upper type is computed based on the constraints.
+            infcx.deferExprTy(t, expr);
+        } {
+            infcx.exprTys.set(expr, t);
         }
         return t;
     }
@@ -1017,10 +1038,22 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
         const constrainVid = (vid: number, ty: Ty) => {
             infcx.tyVars[vid].constrainedTy = ty;
-            // TODO: is it bad that we are discarding GenericArgs here?...
-            const origin = infcx.tyVars[vid].origin;
-            if (origin.type === 'Expr') {
-                exprTys.set(origin.expr, ty);
+
+            const resolve = (ty: Ty): Ty => {
+                return ty.type === 'TyVid' && ty.id === vid ? infcx.tyVars[vid].constrainedTy! : ty;
+            };
+
+            for (const expr of infcx.tyVars[vid].deferredExprs) {
+                infcx.exprTys.set(expr, ty);
+            }
+            for (const sig of infcx.tyVars[vid].dereferredInsts) {
+                for (let i = 0; i < sig.args.length; i++) {
+                    sig.args[i] = resolve(sig.args[i]);
+                }
+                for (let i = 0; i < sig.parameters.length; i++) {
+                    sig.parameters[i] = resolve(sig.parameters[i]);
+                }
+                sig.ret = resolve(sig.ret);
             }
             madeProgress = true;
         };
@@ -1055,6 +1088,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {
                             subFields(sub, sup);
+                        } else if (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id) {
+                            // OK
                         } else if (sub.type === 'Record' && sup.type === 'Alias') {
                             const nsup = infcx.normalize(sup);
                             if (nsup.type === 'Record') {
@@ -1110,7 +1145,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
     const lub = computeLUBTypes();
 
-    return { infcx, loweredTys, exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
+    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
 }
 
 type MirValue = { type: 'i32', value: number }
@@ -1189,14 +1224,14 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         if (decl.body.type !== 'Block') throw `${decl.name} did not have a block as its body?`;
 
         const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
-        const locals: MirLocal[] = [
-            // _0 = return place
-            { ty: typeck.loweredTys.get(decl.ret)!, temporary: false }
-        ];
+        const locals: MirLocal[] = [];
         const addLocal = <temporary extends boolean = boolean>(ty: Ty, temporary: temporary): MirLocalId<temporary> => {
+            if (ty.type === 'TyParam') ty = args[ty.id];
             locals.push({ ty, temporary });
             return locals.length - 1;
         };
+        // _0 = return place
+        assert(addLocal(typeck.loweredTys.get(decl.ret)!, false) === 0);
         const returnPlace = locals[0] as MirLocal<false>;
         const returnId = 0 as MirLocalId<false>;
         const blocks: MirBlock[] = [
@@ -1430,6 +1465,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 
     function codegenFn(decl: FnDecl, args: Ty[]) {
         function inner(decl: FnDecl, args: Ty[]) {
+            const instantiate = (ty: Ty): Ty => {
+                return ty.type === 'TyParam' ? args[ty.id] : ty;
+            }
+
             let _temps = 0;
             let tempLocal = () => _temps++;
             const mir = astToMir(src, mangledName, decl, args, res, typeck);
@@ -1439,7 +1478,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 return mirLocal(mir, id);
             };
 
-            const ret = typeck.loweredTys.get(decl.ret)!;
+            const ret = instantiate(typeck.loweredTys.get(decl.ret)!);
             assert(mir.locals[0].ty === ret, 'return type and return local\'s type must match');
 
             const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
@@ -1467,7 +1506,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             // Begin codegening real blocks
             for (let i = 0; i < mir.blocks.length; i++) {
                 const block = mir.blocks[i];
-                if (block.stmts.length === 0) {
+                if (block.stmts.length === 0 && block.terminator === null) {
                     continue;
                 }
 

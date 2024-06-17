@@ -14,10 +14,14 @@ Running `npm i --save-dev && npx tsc` will give you the compiler.
 ```sh
 # it currently just reads the `input` file
 $ cat input
+function add(a: i32, b: i32): i32 {
+    return a + b;
+}
+function identity<T>(v: T): T {
+    return v;
+}
 function main(): i32 {
-    let x = 40;
-    let y = 2;
-    return x + y;
+    return add(identity(40), identity(2));
 }
 
 # run the compiler on that file
