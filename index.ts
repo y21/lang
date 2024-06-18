@@ -758,6 +758,12 @@ class Infcx {
         return { type: 'TyVid', id };
     }
 
+    mkTyVarExt(_origin: TyVarOrigin, deferredExprs: Expr[], dereferredInsts: InstantiatedFnSig[]): Ty {
+        const id = this.tyVars.length;
+        this.tyVars.push({ constrainedTy: null, deferredExprs, dereferredInsts });
+        return { type: 'TyVid', id };
+    }
+
     withFn(expect: Ty, localTypes: Map<LetDecl | FnParameter, Ty>, f: () => void) {
         this.fnStack.push({ expectedReturnTy: expect, returnFound: false, localTypes });
         f();
@@ -846,6 +852,31 @@ function error(src: string, span: Span, message: string) {
         '^'.repeat(snipLen) +
         `  ${message}`);
     console.log('\x1b[0m');
+}
+
+// creates a new type with type parameters replaced with the provided args
+function instantiateTy(ty: Ty, args: Ty[]): Ty {
+    switch (ty.type) {
+        case 'Alias':
+            return {
+                ...ty,
+                alias: instantiateTy(ty, args)
+            };
+        case 'TyVid':
+        case 'i32':
+        case 'never':
+        case 'string':
+        case 'void':
+            // simple cases: nothing to instantiate
+            return ty;
+        case 'TyParam': return args[ty.id];
+        case 'Array': return { ...ty, elemTy: instantiateTy(ty, args) };
+        case 'FnDef': throw new Error('attempted to instantiate FnDef'); break;
+        case 'Pointer': return { ...ty, pointee: instantiateTy(ty.pointee, args) };
+        case 'Record': {
+            return { type: 'Record', fields: ty.fields.map(([k, ty]) => [k, instantiateTy(ty, args)]) };
+        }
+    }
 }
 
 function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
@@ -972,40 +1003,32 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     return { type: 'Record', fields };
                 }
                 case 'FnCall': {
-                    // NOTE: This only instantiates the header (signature), not the whole body.
-                    function instantiateFnSig(def: FnDecl, args: Ty[]): InstantiatedFnSig {
-                        if (args.length !== def.generics.length) {
-                            throw new Error(`attempted to instantiate fn sig with wrong generic arg count (${args.length} != ${def.generics.length})`);
-                        }
-
-                        const remapTy = (ty: AstTy) => {
-                            // TODO!!!: this should look for nested typarams, ie `Vec<T>`
-                            const lowered = lowerTy(ty);
-                            if (lowered.type === 'TyParam') {
-                                return args[lowered.id];
-                            } else {
-                                return lowered;
-                            }
-                        };
-
-                        return {
-                            parameters: def.parameters.map(p => remapTy(p.ty)),
-                            ret: remapTy(def.ret),
-                            args
-                        }
-                    }
-
                     const sig = (() => {
                         const callee = typeckExpr(expr.callee);
                         if (callee.type !== 'FnDef') {
                             throw new Error('callee must be a FnDef');
                         }
-                        const genericArgs = [];
+
+                        // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
+                        const sig: InstantiatedFnSig = {
+                            parameters: [],
+                            ret: { type: 'void' },
+                            args: []
+                        };
+
                         for (let i = 0; i < callee.decl.generics.length; i++) {
-                            const tv = infcx.mkTyVar({ type: 'GenericArg' });
-                            genericArgs.push(tv);
+                            const tv = infcx.mkTyVarExt({ type: 'GenericArg' }, [], [sig]);
+                            sig.args.push(tv);
                         }
-                        return instantiateFnSig(callee.decl, genericArgs);
+
+                        // with `genericArgs` created we can fix up the signature
+                        for (const param of callee.decl.parameters) {
+                            const ty = lowerTy(param.ty);
+                            sig.parameters.push(instantiateTy(ty, sig.args));
+                        }
+                        sig.ret = instantiateTy(lowerTy(callee.decl.ret), sig.args);
+
+                        return sig;
                     })();
                     instantiatedFnSigs.set(expr, sig);
 
@@ -1016,10 +1039,6 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
 
                     for (let i = 0; i < gotCount; i++) {
-                        const paramTy = sig.parameters[i];
-                        if (paramTy.type === 'TyVid') {
-                            infcx.deferInstSig(paramTy, sig);
-                        }
                         infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i]);
                     }
 
@@ -1471,9 +1490,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 
     function codegenFn(decl: FnDecl, args: Ty[]) {
         function inner(decl: FnDecl, args: Ty[]) {
-            const instantiate = (ty: Ty): Ty => {
-                return ty.type === 'TyParam' ? args[ty.id] : ty;
-            }
 
             let _temps = 0;
             let tempLocal = () => _temps++;
@@ -1484,8 +1500,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 return mirLocal(mir, id);
             };
 
-            const ret = instantiate(typeck.loweredTys.get(decl.ret)!);
-            assert(mir.locals[0].ty === ret, 'return type and return local\'s type must match');
+            const ret = mir.locals[0].ty;
 
             const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
 
@@ -1584,7 +1599,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     }
                 }
             }
-
 
             output += '\n}\n\n';
 
