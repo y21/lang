@@ -694,7 +694,7 @@ function computeResolutions(ast: Program): Resolutions {
 }
 
 type RecordType = { type: 'Record', fields: RecordFields<Ty> };
-type Ty = { type: 'TyVid', id: number }
+type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'void' }
     | { type: 'never' }
     | { type: 'i32' }
@@ -704,7 +704,33 @@ type Ty = { type: 'TyVid', id: number }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
-    | { type: 'Alias', decl: TyAliasDecl, alias: Ty };
+    | { type: 'Alias', decl: TyAliasDecl, alias: Ty });
+
+type TypeFlags = number;
+const TYPARAM_MASK = 0b01;
+const TYVID_MASK = 0b10;
+const EMPTY_FLAGS = 0;
+function mkFlags(tyParam: boolean, tyVid: boolean): TypeFlags {
+    return (tyParam ? TYPARAM_MASK : 0)
+        | (tyVid ? TYVID_MASK : 0);
+}
+function hasTyParam(ty: Ty): boolean {
+    return (ty.flags & TYPARAM_MASK) !== 0;
+}
+// function removeTyParam(ty: Ty): Ty {
+//     ty.flags &= ~TYPARAM_MASK;
+//     return ty;
+// }
+function withoutTyParam(flags: TypeFlags): TypeFlags {
+    return flags & ~TYPARAM_MASK;
+}
+function hasTyVid(ty: Ty): boolean {
+    return (ty.flags & TYVID_MASK) !== 0;
+}
+function removeTyVid(ty: Ty): Ty {
+    ty.flags &= ~TYVID_MASK;
+    return ty;
+}
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument';
@@ -755,13 +781,13 @@ class Infcx {
     mkTyVar(_origin: TyVarOrigin): Ty {
         const id = this.tyVars.length;
         this.tyVars.push({ constrainedTy: null, deferredExprs: [], dereferredInsts: [] });
-        return { type: 'TyVid', id };
+        return { type: 'TyVid', flags: EMPTY_FLAGS, id };
     }
 
     mkTyVarExt(_origin: TyVarOrigin, deferredExprs: Expr[], dereferredInsts: InstantiatedFnSig[]): Ty {
         const id = this.tyVars.length;
         this.tyVars.push({ constrainedTy: null, deferredExprs, dereferredInsts });
-        return { type: 'TyVid', id };
+        return { type: 'TyVid', flags: EMPTY_FLAGS, id };
     }
 
     withFn(expect: Ty, localTypes: Map<LetDecl | FnParameter, Ty>, f: () => void) {
@@ -856,12 +882,18 @@ function error(src: string, span: Span, message: string) {
 
 // creates a new type with type parameters replaced with the provided args
 function instantiateTy(ty: Ty, args: Ty[]): Ty {
+    // Fast path: type flags can instantly tell us if this type doesn't have any type parameters
+    if (!hasTyParam(ty)) return ty;
+
     switch (ty.type) {
-        case 'Alias':
+        case 'Alias': {
+            const alias = instantiateTy(ty, args);
             return {
                 ...ty,
-                alias: instantiateTy(ty, args)
+                flags: withoutTyParam(alias.flags),
+                alias
             };
+        }
         case 'TyVid':
         case 'i32':
         case 'never':
@@ -869,12 +901,29 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
         case 'void':
             // simple cases: nothing to instantiate
             return ty;
-        case 'TyParam': return args[ty.id];
-        case 'Array': return { ...ty, elemTy: instantiateTy(ty, args) };
+        case 'TyParam':
+            assert(ty.id < args.length, 'type parameter index out of bounds');
+            return args[ty.id];
+        case 'Array': {
+            const elemTy = instantiateTy(ty, args);
+            return { ...ty, flags: withoutTyParam(elemTy.flags), elemTy };
+        }
         case 'FnDef': throw new Error('attempted to instantiate FnDef'); break;
-        case 'Pointer': return { ...ty, pointee: instantiateTy(ty.pointee, args) };
+        case 'Pointer': {
+            const pointee = instantiateTy(ty.pointee, args);
+            return { ...ty, flags: withoutTyParam(pointee.flags), pointee };
+        }
         case 'Record': {
-            return { type: 'Record', fields: ty.fields.map(([k, ty]) => [k, instantiateTy(ty, args)]) };
+            let flags = EMPTY_FLAGS;
+            const fields: RecordFields<Ty> = [];
+
+            for (const [key, value] of ty.fields) {
+                const ty = instantiateTy(value, args);
+                flags |= withoutTyParam(ty.flags);
+                fields.push([key, ty]);
+            }
+
+            return { flags, type: 'Record', fields: fields };
         }
     }
 }
@@ -893,20 +942,35 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Path': {
                     const tyres = res.tyResolutions.get(ty)!;
                     switch (tyres.type) {
-                        case 'TyParam': return { type: 'TyParam', id: tyres.id, parentItem: tyres.parentItem };
+                        case 'TyParam': return { type: 'TyParam', flags: TYPARAM_MASK, id: tyres.id, parentItem: tyres.parentItem };
                         case 'Primitive': switch (tyres.kind) {
-                            case PrimitiveTy.Void: return { type: 'void' };
-                            case PrimitiveTy.Never: return { type: 'never' };
-                            case PrimitiveTy.I32: return { type: 'i32' };
+                            case PrimitiveTy.Void: return { type: 'void', flags: EMPTY_FLAGS };
+                            case PrimitiveTy.Never: return { type: 'never', flags: EMPTY_FLAGS };
+                            case PrimitiveTy.I32: return { type: 'i32', flags: EMPTY_FLAGS };
                             default: assertUnreachable(tyres.kind)
                         }
-                        case 'TyAlias': return { type: 'Alias', decl: tyres, alias: lowerTy(tyres.alias) };
+                        case 'TyAlias': return { type: 'Alias', flags: mkFlags(tyres.generics.length > 0, false), decl: tyres, alias: lowerTy(tyres.alias) };
                         default: assertUnreachable(tyres)
                     }
                 }
-                case 'Array': return { type: 'Array', elemTy: lowerTy(ty.elemTy), len: ty.len };
-                case 'Pointer': return { type: 'Pointer', mtb: ty.mtb, pointee: lowerTy(ty.pointeeTy) };
-                case 'Record': return { type: 'Record', fields: ty.fields.map(([k, ty]) => [k, lowerTy(ty)]) };
+                case 'Array': {
+                    const elemTy = lowerTy(ty.elemTy);
+                    return { type: 'Array', flags: elemTy.flags, elemTy, len: ty.len };
+                }
+                case 'Pointer': {
+                    const pointee = lowerTy(ty.pointeeTy);
+                    return { type: 'Pointer', flags: pointee.flags, mtb: ty.mtb, pointee };
+                }
+                case 'Record': {
+                    let flags = EMPTY_FLAGS;
+                    const fields: RecordFields<Ty> = [];
+                    for (const [k, sty] of ty.fields) {
+                        const lowered = lowerTy(sty);
+                        fields.push([k, lowered]);
+                        flags |= lowered.flags;
+                    }
+                    return { type: 'Record', flags, fields };
+                }
                 case 'Alias': throw new Error('cannot lower type aliases directly');
                 default: assertUnreachable(ty);
             }
@@ -939,11 +1003,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     function typeckExpr(expr: Expr): Ty {
         function inner(expr: Expr): Ty {
             switch (expr.type) {
-                case 'Block': for (const stmt of expr.stmts) typeckStmt(stmt); return { type: 'void' };
+                case 'Block': for (const stmt of expr.stmts) typeckStmt(stmt); return { type: 'void', flags: 0 };
                 case 'Literal': {
                     const litres = res.valueResolutions.get(expr)!;
                     switch (litres.type) {
-                        case 'FnDecl': return { type: 'FnDef', decl: litres };
+                        case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'LetDecl': return infcx.localTy(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
                         default: assertUnreachable(litres);
@@ -952,7 +1016,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Return': {
                     const ret = typeckExpr(expr.value);
                     infcx.registerReturn(expr.span, ret);
-                    return { type: 'never' };
+                    return { type: 'never', flags: EMPTY_FLAGS };
                 }
                 case 'ArrayLiteral': {
                     let elemTy: Ty;
@@ -962,14 +1026,14 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         elemTy = typeckExpr(expr.elements[0]);
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
                     }
-                    return { type: 'Array', elemTy, len: expr.elements.length };
+                    return { type: 'Array', flags: elemTy.flags, elemTy, len: expr.elements.length };
                 }
                 case 'Assignment': {
                     infcx.sub('Assignment', expr.span, typeckExpr(expr.value), typeckExpr(expr.target));
-                    return { type: 'void' };
+                    return { type: 'void', flags: EMPTY_FLAGS };
                 }
                 case 'Index': {
-                    infcx.sub('Index', expr.span, typeckExpr(expr.index), { type: 'i32' });
+                    infcx.sub('Index', expr.span, typeckExpr(expr.index), { type: 'i32', flags: EMPTY_FLAGS });
                     const target = typeckExpr(expr.target);
                     if (target.type === 'Array') {
                         return target.elemTy;
@@ -979,14 +1043,17 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
                 }
                 // TODO: typescript's "as const" can create a literal type?
-                case 'Number': return { type: 'i32' };
-                case 'String': return { type: 'string' };
+                case 'Number': return { type: 'i32', flags: EMPTY_FLAGS };
+                case 'String': return { type: 'string', flags: EMPTY_FLAGS };
                 case 'Binary': {
-                    infcx.sub('UseInArithmeticOperation', expr.lhs.span, typeckExpr(expr.lhs), { type: 'i32' });
-                    infcx.sub('UseInArithmeticOperation', expr.rhs.span, typeckExpr(expr.rhs), { type: 'i32' });
-                    return { type: 'i32' };
+                    infcx.sub('UseInArithmeticOperation', expr.lhs.span, typeckExpr(expr.lhs), { type: 'i32', flags: EMPTY_FLAGS });
+                    infcx.sub('UseInArithmeticOperation', expr.rhs.span, typeckExpr(expr.rhs), { type: 'i32', flags: EMPTY_FLAGS });
+                    return { type: 'i32', flags: EMPTY_FLAGS };
                 }
-                case 'AddrOf': return { type: 'Pointer', mtb: expr.mtb, pointee: typeckExpr(expr.pointee) };
+                case 'AddrOf': {
+                    const pointee = typeckExpr(expr.pointee);
+                    return { type: 'Pointer', flags: pointee.flags, mtb: expr.mtb, pointee };
+                }
                 case 'Deref': {
                     const pointee = typeckExpr(expr.pointee);
                     if (pointee.type === 'Pointer') {
@@ -997,10 +1064,13 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 };
                 case 'Record': {
                     const fields: RecordFields<Ty> = [];
+                    let flags = EMPTY_FLAGS;
                     for (const [key, value] of expr.fields) {
-                        fields.push([key, typeckExpr(value)]);
+                        const ty = typeckExpr(value);
+                        fields.push([key, ty]);
+                        flags |= ty.flags;
                     }
-                    return { type: 'Record', fields };
+                    return { type: 'Record', flags, fields };
                 }
                 case 'FnCall': {
                     const sig = (() => {
@@ -1012,7 +1082,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
                         const sig: InstantiatedFnSig = {
                             parameters: [],
-                            ret: { type: 'void' },
+                            ret: { type: 'void', flags: EMPTY_FLAGS },
                             args: []
                         };
 
@@ -1090,7 +1160,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 const sub = infcx.tryResolve(constraint.sub);
                 const sup = infcx.tryResolve(constraint.sup);
 
-                function subFields(sub: RecordType, sup: RecordType) {
+                function subFields(sub: Ty & RecordType, sup: Ty & RecordType) {
                     if (sub.fields.length !== sup.fields.length) {
                         // Fast fail: no point in comparing fields when they lengths don't match.
                         error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
@@ -1251,7 +1321,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
         const locals: MirLocal[] = [];
         const addLocal = <temporary extends boolean = boolean>(ty: Ty, temporary: temporary): MirLocalId<temporary> => {
-            if (ty.type === 'TyParam') ty = args[ty.id];
+            ty = instantiateTy(ty, args);
             locals.push({ ty, temporary });
             return locals.length - 1;
         };
@@ -1632,6 +1702,7 @@ const llir = timed('llir/mir codegen', () => codegen(src, ast, resolutions, tyre
 
 const llpath = `/tmp/tmpir${Date.now()}.ll`;
 fs.writeFileSync(llpath, llir);
+console.log('IR path:', llpath);
 // TODO: don't use -Wno-override-module
 timed('clang', () => cProcess.spawnSync(`clang -Wno-override-module ${llpath}`, {
     shell: true,
