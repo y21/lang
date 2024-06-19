@@ -1233,14 +1233,26 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 }
                                 subFields(sub, nsup);
                             }
-                        } else if (sub.type === 'TyVid') {
-                            if (sup.type === 'TyVid') {
-                                // Can't progress. Re-add for later.
-                                infcx.constraints.push(constraint);
+                        } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
+                            let tyvid: { type: 'TyVid' } & Ty;
+                            let other: Ty;
+
+                            if (sub.type === 'TyVid') {
+                                tyvid = sub;
+                                other = sup;
+                            } else if (sup.type === 'TyVid') {
+                                tyvid = sup;
+                                other = sub;
                             } else {
-                                constrainVid(sub.id, sup);
+                                throw 'unreachable';
                             }
-                        } else if (sub.type === 'never') {
+
+                            constrainVid(tyvid.id, other);
+                        } else if (sub.type === 'TyVid' && sup.type === 'TyVid') {
+                            // Both related types are type variables, can't progress
+                            infcx.constraints.push(constraint);
+                        }
+                        else if (sub.type === 'never') {
                             // OK. Never is a subtype of all types.
                         } else {
                             // Error case.
