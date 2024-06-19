@@ -560,6 +560,8 @@ function computeResolutions(ast: Program): Resolutions {
                 if (ty.value.segments.length !== 1) {
                     throw new Error('path must have one segment');
                 }
+                for (const arg of ty.value.segments[0].args) resolveTy(arg.ty);
+
                 const segment = ty.value.segments[0];
                 switch (segment.ident) {
                     case 'void': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Void }); break;
@@ -574,7 +576,8 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Record':
                 for (const [, v] of ty.fields) resolveTy(v);
                 break;
-            case 'Alias': resolveTy(ty.alias); break;
+            case 'Alias':
+                resolveTy(ty.alias); break;
             default: assertUnreachable(ty);
         }
     }
@@ -704,23 +707,15 @@ type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
-    | { type: 'Alias', decl: TyAliasDecl, alias: Ty });
+    | { type: 'Alias', decl: TyAliasDecl, alias: Ty, args: Ty[] });
 
 type TypeFlags = number;
 const TYPARAM_MASK = 0b01;
 const TYVID_MASK = 0b10;
 const EMPTY_FLAGS = 0;
-function mkFlags(tyParam: boolean, tyVid: boolean): TypeFlags {
-    return (tyParam ? TYPARAM_MASK : 0)
-        | (tyVid ? TYVID_MASK : 0);
-}
 function hasTyParam(ty: Ty): boolean {
     return (ty.flags & TYPARAM_MASK) !== 0;
 }
-// function removeTyParam(ty: Ty): Ty {
-//     ty.flags &= ~TYPARAM_MASK;
-//     return ty;
-// }
 function withoutTyParam(flags: TypeFlags): TypeFlags {
     return flags & ~TYPARAM_MASK;
 }
@@ -814,10 +809,17 @@ class Infcx {
         this.sub('Return', at, ty, sup);
     }
 
+    // For type aliases, instantiates and returns the aliased type. E.g.
+    //
+    //     type X<T> = { v: T }
+    //
+    // Calling `normalize(X<i32>)` returns `{ v: i32 }`.
+    // For any other kind of type, this just returns it unchanged.
     normalize(ty: Ty): Ty {
         while (ty.type === 'Alias') {
-            ty = ty.alias;
+            ty = instantiateTy(ty.alias, ty.args);
         }
+
         return ty;
     }
 
@@ -887,11 +889,17 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
 
     switch (ty.type) {
         case 'Alias': {
-            const alias = instantiateTy(ty, args);
+            let flags = EMPTY_FLAGS;
+            const instArgs: Ty[] = [];
+            for (const arg of ty.args) {
+                const inst = instantiateTy(arg, args);
+                flags |= withoutTyParam(inst.flags);
+                instArgs.push(inst);
+            }
             return {
                 ...ty,
-                flags: withoutTyParam(alias.flags),
-                alias
+                flags,
+                args: instArgs,
             };
         }
         case 'TyVid':
@@ -949,7 +957,16 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             case PrimitiveTy.I32: return { type: 'i32', flags: EMPTY_FLAGS };
                             default: assertUnreachable(tyres.kind)
                         }
-                        case 'TyAlias': return { type: 'Alias', flags: mkFlags(tyres.generics.length > 0, false), decl: tyres, alias: lowerTy(tyres.alias) };
+                        case 'TyAlias':
+                            const args: Ty[] = [];
+                            let flags = EMPTY_FLAGS;
+                            for (const arg of ty.value.segments[0].args) {
+                                const lowered = lowerTy(arg.ty);
+                                flags |= lowered.flags;
+                                args.push(lowered);
+                            }
+
+                            return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -1114,7 +1131,17 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
                     return sig.ret;
                 }
-                default: todo(expr.type);
+                case 'Property':
+                    const target = infcx.normalize(typeckExpr(expr.target));
+                    if (target.type !== 'Record') {
+                        throw new Error(`property access requires record type, got ${ppTy(target)}`);
+                    }
+                    const field = target.fields.find(([k]) => k === expr.property);
+                    if (!field) {
+                        throw new Error(`field '${expr.property}' not found on type ${ppTy(target)}`);
+                    }
+                    return field[1];
+                default: assertUnreachable(expr);
             }
         }
         const t = inner(expr);
@@ -1186,6 +1213,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         } else if (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id) {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Alias') {
+                            // TODO: also check args
                             const nsup = infcx.normalize(sup);
                             if (nsup.type === 'Record') {
                                 if (
@@ -1281,7 +1309,17 @@ function mangleTy(ty: Ty): string {
             throw new Error(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
-        case 'Alias': return mangleTy(ty.alias);
+        case 'Alias':
+            let out = mangleTy(ty.alias);
+            if (ty.args.length > 0) {
+                out += '$LT$';
+                for (let i = 0; i < ty.args.length; i++) {
+                    if (i !== 0) out += '$$';
+                    out += mangleTy(ty.args[i]);
+                }
+                out += '$RT$';
+            }
+            return out;
         case 'Record': todo('mangle record ty');
         default: assertUnreachable(ty);
     }
