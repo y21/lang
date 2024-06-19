@@ -753,12 +753,13 @@ type InstantiatedFnSig = {
 
 type InfTyVar = {
     constrainedTy: Ty | null,
+    origin: TyVarOrigin,
     // When constraining this inference variable to a concrete type, then we may need to insert new types into the `exprTys` map
     deferredExprs: Expr[],
     // Same as with `deferredExprs`, but will replace any affected inference variables in this `InstantiatedFnSig`
     dereferredInsts: InstantiatedFnSig[]
 };
-type TyVarOrigin = { type: 'Expr' } | { type: 'GenericArg' };
+type TyVarOrigin = { span: Span } & ({ type: 'Expr' } | { type: 'GenericArg' });
 type LUBResult = { hadErrors: boolean };
 
 class Infcx {
@@ -773,15 +774,15 @@ class Infcx {
         this.constraints.push({ type: 'SubtypeOf', at, cause, sub, sup });
     }
 
-    mkTyVar(_origin: TyVarOrigin): Ty {
+    mkTyVar(origin: TyVarOrigin): Ty {
         const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, deferredExprs: [], dereferredInsts: [] });
+        this.tyVars.push({ constrainedTy: null, deferredExprs: [], dereferredInsts: [], origin });
         return { type: 'TyVid', flags: EMPTY_FLAGS, id };
     }
 
-    mkTyVarExt(_origin: TyVarOrigin, deferredExprs: Expr[], dereferredInsts: InstantiatedFnSig[]): Ty {
+    mkTyVarExt(origin: TyVarOrigin, deferredExprs: Expr[], dereferredInsts: InstantiatedFnSig[]): Ty {
         const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, deferredExprs, dereferredInsts });
+        this.tyVars.push({ constrainedTy: null, deferredExprs, dereferredInsts, origin });
         return { type: 'TyVid', flags: EMPTY_FLAGS, id };
     }
 
@@ -1038,7 +1039,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'ArrayLiteral': {
                     let elemTy: Ty;
                     if (expr.elements.length === 0) {
-                        elemTy = infcx.mkTyVar({ type: "Expr" });
+                        elemTy = infcx.mkTyVar({ type: "Expr", span: expr.span });
                     } else {
                         elemTy = typeckExpr(expr.elements[0]);
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
@@ -1104,7 +1105,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         };
 
                         for (let i = 0; i < callee.decl.generics.length; i++) {
-                            const tv = infcx.mkTyVarExt({ type: 'GenericArg' }, [], [sig]);
+                            const tv = infcx.mkTyVarExt({ type: 'GenericArg', span: expr.span }, [], [sig]);
                             sig.args.push(tv);
                         }
 
@@ -1157,8 +1158,14 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     function computeLUBTypes(): LUBResult {
         let errors = false;
         let madeProgress = true;
+        // we're using a simple number here that's decremented when constraining a new var
+        // to save on another pass through the tyVars at the end in the happy case where everything was constrained
+        let remainingInferVars = infcx.tyVars.reduce((prev, curr) => prev + +(curr.constrainedTy === null), 0);
+        assert(remainingInferVars === infcx.tyVars.length, 'cannot call computeLUBTypes() with already constrained infer vars');
 
         const constrainVid = (vid: number, ty: Ty) => {
+            assert(infcx.tyVars[vid].constrainedTy === null, 'tried to constrain the same TyVid twice');
+            remainingInferVars--;
             infcx.tyVars[vid].constrainedTy = ty;
 
             const resolve = (ty: Ty): Ty => {
@@ -1257,6 +1264,15 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
         if (infcx.constraints.length > 0) {
             throw new Error('LUB compute got stuck making no progress but there are still constraints!');
+        }
+
+        if (remainingInferVars > 0) {
+            for (const tyvar of infcx.tyVars) {
+                if (tyvar.constrainedTy === null) {
+                    error(src, tyvar.origin.span, `type error: unconstrained type variable created here`)
+                    errors = true;
+                }
+            }
         }
 
         return { hadErrors: errors }
