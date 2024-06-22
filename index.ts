@@ -940,20 +940,6 @@ class Infcx {
         this.sub('Return', at, ty, sup);
     }
 
-    // For type aliases, instantiates and returns the aliased type. E.g.
-    //
-    //     type X<T> = { v: T }
-    //
-    // Calling `normalize(X<i32>)` returns `{ v: i32 }`.
-    // For any other kind of type, this just returns it unchanged.
-    normalize(ty: Ty): Ty {
-        while (ty.type === 'Alias') {
-            ty = instantiateTy(ty.alias, ty.args);
-        }
-
-        return ty;
-    }
-
     deferExprTy(ty: { type: 'TyVid', id: number }, expr: Expr) {
         this.tyVars[ty.id].deferredExprs.push(expr);
     }
@@ -997,7 +983,8 @@ function ppTy(ty: Ty): string {
             }
             return out + '}';
         }
-        case 'Alias': return ppTy(ty.alias);
+        case 'Alias':
+            return `${ty.decl.name}<${ty.args.map(ty => ppTy(ty)).join(', ')}>`;
     }
 }
 
@@ -1069,6 +1056,20 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
             return { flags, type: 'Record', fields: fields };
         }
     }
+}
+
+// For type aliases, instantiates and returns the aliased type. E.g.
+//
+//     type X<T> = { v: T }
+//
+// Calling `normalize(X<i32>)` returns `{ v: i32 }`.
+// For any other kind of type, this just returns it unchanged.
+function normalize(ty: Ty): Ty {
+    while (ty.type === 'Alias') {
+        ty = instantiateTy(ty.alias, ty.args);
+    }
+
+    return ty;
 }
 
 function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
@@ -1269,7 +1270,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     return sig.ret;
                 }
                 case 'Property':
-                    const target = infcx.normalize(typeckExpr(expr.target));
+                    const target = normalize(typeckExpr(expr.target));
                     if (target.type !== 'Record') {
                         throw new Error(`property access requires record type, got ${ppTy(target)}`);
                     }
@@ -1356,9 +1357,17 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             subFields(sub, sup);
                         } else if (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id) {
                             // OK
+                        } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
+                            infcx.constraints.push({
+                                type: 'SubtypeOf',
+                                at: constraint.at,
+                                cause: constraint.cause,
+                                sub: sub.pointee,
+                                sup: sup.pointee
+                            });
                         } else if (sub.type === 'Record' && sup.type === 'Alias') {
                             // TODO: also check args
-                            const nsup = infcx.normalize(sup);
+                            const nsup = normalize(sup);
                             if (nsup.type === 'Record') {
                                 if (
                                     sup.decl.constructibleIn.length > 0
@@ -1372,7 +1381,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             }
                         } else if (sub.type === 'Alias' && sup.type === 'Alias') {
                             // TODO: check constructibleIn for both aliases
-                            infcx.constraints.push({ type: 'SubtypeOf', sub: infcx.normalize(sub), sup: infcx.normalize(sup), at: constraint.at, cause: constraint.cause });
+                            infcx.constraints.push({ type: 'SubtypeOf', sub: normalize(sub), sup: normalize(sup), at: constraint.at, cause: constraint.cause });
                         } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                             let tyvid: { type: 'TyVid' } & Ty;
                             let other: Ty;
@@ -1758,8 +1767,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'string':
             case 'FnDef':
             case 'Array':
-            case 'Alias':
                 todo(ty.type);
+            case 'Alias':
+                return llTy(normalize(ty));
             case 'Record': return '{' + ty.fields.map(v => llTy(v[1])).join(', ') + '}';
             case 'TyVid':
             case 'never':
@@ -1939,7 +1949,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             const rawBase = mir.locals[stmt.place.base];
 
                             let finalLocal: string;
-                            let finalTy = rawBase.ty;
+                            let finalTy = normalize(rawBase.ty);
                             if (rawBase.temporary) {
                                 // This could be e.g.:
                                 //     _ = f().v.x  where f(): {v:{x:i32}}
@@ -1950,8 +1960,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 // We generally want to codegen these projections as a series of GEP, which requires a pointer operand
                                 // so we alloca a new variable that we store the base in.
                                 const baseId = `%t.${tempLocal()}`;
-                                output += `${baseId} = alloca ${llTy(rawBase.ty)}\n`;
-                                output += `store ${llTy(rawBase.ty)} %l.${stmt.place.base}, ${llTy(rawBase.ty)}* ${baseId}\n`;
+                                output += `${baseId} = alloca ${llTy(finalTy)}\n`;
+                                output += `store ${llTy(finalTy)} %l.${stmt.place.base}, ${llTy(finalTy)}* ${baseId}\n`;
                                 finalLocal = baseId;
                             } else {
                                 // If it's not a temporary, then the base is most likely a local variable.
@@ -1986,7 +1996,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 const oldTyS = llTy(oldTy);
 
                                 const projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
-                                finalTy = oldTy.fields[projectedIndex][1];
+                                finalTy = normalize(oldTy.fields[projectedIndex][1]);
                                 output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
                             }
 

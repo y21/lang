@@ -1,11 +1,11 @@
 
-    throw new Error('Todo: ' + what);
-    ^
+                throw new Error(`${ty.type} should not appear in llir lowering`);
+                ^
 
-Error: Todo: Alias
+Error: TyVid should not appear in llir lowering
 
 
-
+    
 
 
 
