@@ -16,6 +16,7 @@ expr @ 6:5 6:42 => never
 expr @ 5:22 8:1 => void
 expr @ 6:30 6:41 => i32
 expr @ 6:16 6:28 => i32
+test
 
 define i32 @identity$LT$i32$GT$(i32 %lt.1) {
 prologue:
