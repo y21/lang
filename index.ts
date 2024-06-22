@@ -2,10 +2,6 @@ import fs from 'fs';
 import cProcess from 'child_process';
 import { inspect as _inspect } from 'util';
 
-function inspect(v: any, forceColors = true): string {
-    return _inspect(v, { depth: Infinity, colors: forceColors });
-}
-
 function assertUnreachable(v: never): never {
     throw 'impossible';
 }
@@ -25,6 +21,7 @@ type CliOptions = {
     optLevel: OptLevel,
     verbose: boolean,
     timings: boolean;
+    colors: boolean;
 };
 
 function parseOptions(): CliOptions {
@@ -33,6 +30,7 @@ function parseOptions(): CliOptions {
     let verbose = false;
     let printLlirOnly = false;
     let timings = true;
+    let colors = true;
     const args = process.argv.slice(2).values();
 
     let opt: IteratorResult<string>;
@@ -46,6 +44,7 @@ function parseOptions(): CliOptions {
             case '--print-llir-only': printLlirOnly = true; break;
             case '--no-timings': timings = false; break;
             case '--verbose': verbose = true; break;
+            case '--no-colors': colors = false; break;
             default:
                 if (path) {
                     throw new Error('cannot specify an input path twice');
@@ -57,9 +56,13 @@ function parseOptions(): CliOptions {
 
     path ||= 'input';
 
-    return { path, optLevel, verbose, printLlirOnly, timings };
+    return { path, optLevel, verbose, printLlirOnly, timings, colors };
 }
 const options = parseOptions();
+
+function inspect(v: any): string {
+    return _inspect(v, { depth: Infinity, colors: options.colors });
+}
 
 type Span = [number, number];
 
@@ -964,18 +967,19 @@ function ppTy(ty: Ty): string {
 }
 
 function error(src: string, span: Span, message: string) {
+    const red = (text: string) => options.colors ? `\x1b[1;31m${text}\x1b[0m` : text;
+
     let lineStart = src.lastIndexOf('\n', span[0]);
     let lineEnd = src.indexOf('\n', span[1]);
     const col = span[0] - lineStart;
     const snipLen = span[1] - span[0];
     const line = src.substring(lineStart, lineEnd);
 
-    console.log('');
-    console.log(line);
-    console.log(' '.repeat(col - 1) + '\x1b[1;31m' +
+    console.error('');
+    console.error(line);
+    console.error(' '.repeat(col - 1) + red(
         '^'.repeat(snipLen) +
-        `  ${message}`);
-    console.log('\x1b[0m');
+        `  ${message}`));
 }
 
 // creates a new type with type parameters replaced with the provided args

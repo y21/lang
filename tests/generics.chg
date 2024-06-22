@@ -1,0 +1,7 @@
+function identity<T>(v: T): T { return v; }
+
+function add(x: i32, y: i32): i32 { return x + y; }
+
+function main(): i32 {
+    return add(identity(40), identity(2));
+}

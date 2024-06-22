@@ -1,0 +1,14 @@
+
+type Vec<T> constructible(mkVec) = {
+    ptr: T*,
+    len: i32,
+    cap: i32
+};
+
+function mkVec<T>(): Vec<T> {
+    return .{ ptr: 0, len: 0, cap: 0 };
+}
+
+function main(): i32 {
+    return 0;
+}

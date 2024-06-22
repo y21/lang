@@ -1,0 +1,7 @@
+function simpleRecord(v: i32): { x: i32, y: i32 } {
+    return .{ x: v * 2, y: v };
+}
+
+function main(): i32 {
+    return simpleRecord(10).x + simpleRecord(20).y;
+}

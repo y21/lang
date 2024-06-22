@@ -1,0 +1,23 @@
+expr @ 9:20 9:21 => i32
+expr @ 9:28 9:29 => i32
+expr @ 9:36 9:37 => i32
+expr @ 9:12 9:39 => {ptr: i32,len: i32,cap: i32}
+expr @ 9:5 9:39 => never
+expr @ 8:29 11:0 => void
+expr @ 13:12 13:13 => i32
+expr @ 13:5 13:13 => never
+expr @ 12:22 15:1 => void
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 0, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
+
+

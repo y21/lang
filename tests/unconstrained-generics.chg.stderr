@@ -1,0 +1,21 @@
+
+
+    return foo();
+           ^^^^^  type error: unconstrained type variable created here
+
+            throw new Error(`attempted to mangle ${ty.type}`);
+            ^
+
+Error: attempted to mangle TyVid
+
+
+
+
+
+
+
+
+    
+    
+
+

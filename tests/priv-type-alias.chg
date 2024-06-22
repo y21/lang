@@ -1,0 +1,13 @@
+type Point<T> constructible(mkPoint) = { x: T, y: T };
+
+function mkPoint<T>(x: T, y: T): Point<T> {
+    return .{ x: x, y: y };
+}
+
+function notAllowed(): Point<i32> {
+    return .{ x: 1, y: 2 };
+}
+
+function main(): i32 {
+    return mkPoint(1, 2).x + notAllowed().y;
+}
