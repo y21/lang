@@ -1195,17 +1195,17 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 const sup = infcx.tryResolve(constraint.sup);
 
                 function subFields(sub: Ty & RecordType, sup: Ty & RecordType) {
-                    // TODO: this probably needs to check the order too...
                     if (sub.fields.length !== sup.fields.length) {
                         // Fast fail: no point in comparing fields when they lengths don't match.
                         error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
                     } else {
-                        for (const [k1, v1] of sub.fields) {
-                            const supf = sup.fields.find(([k2]) => k1 === k2);
-                            if (supf) {
-                                infcx.constraints.push({ at: constraint.at, cause: constraint.cause, sub: v1, sup: supf[1], type: 'SubtypeOf' })
+                        for (let i = 0; i < sub.fields.length; i++) {
+                            const subf = sub.fields[i];
+                            const supf = sup.fields[i];
+                            if (subf[0] !== supf[0]) {
+                                error(src, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
                             } else {
-                                error(src, constraint.at, `type error: no field '${k1}' in '${ppTy(sup)}'`);
+                                infcx.constraints.push({ at: constraint.at, cause: constraint.cause, sub: subf[1], sup: supf[1], type: 'SubtypeOf' });
                             }
                         }
                         madeProgress = true;
