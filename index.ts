@@ -1233,6 +1233,9 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 }
                                 subFields(sub, nsup);
                             }
+                        } else if (sub.type === 'Alias' && sup.type === 'Alias') {
+                            // TODO: check constructibleIn for both aliases
+                            infcx.constraints.push({ type: 'SubtypeOf', sub: infcx.normalize(sub), sup: infcx.normalize(sup), at: constraint.at, cause: constraint.cause });
                         } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                             let tyvid: { type: 'TyVid' } & Ty;
                             let other: Ty;
@@ -1309,9 +1312,11 @@ type MirValue = { type: 'i32', value: number }
  */
 type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary: temporary };
 type MirLocalId<temporary extends boolean = boolean> = number;
+type Projection = { type: 'Field', property: string } | { type: 'Deref' };
+type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
 type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValue }
     | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
-    | { type: 'DerefCopy', assignee: MirLocalId<true>, local: MirLocalId<false> }
+    | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> };
 type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId };
@@ -1410,6 +1415,27 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             astLocalToMirLocal.set(param, local);
         }
 
+        /**
+         * If the given value is a place, assigns a copy of it to a local and returns that local.
+         * Otherwise returns the value unchanged.
+         */
+        function asValue(val: ({ type: 'Place' } & MirPlace<boolean>) | MirValue, ty: Ty): MirValue {
+            if (val.type === 'Place') {
+                // Trivial case: base is already a non-temporary local with no projections. E.g. simply `x`
+                if (!locals[val.base].temporary && val.projections.length === 0) return { type: 'Local', value: val.base };
+
+                const res = addLocal(ty, true);
+                block.stmts.push({
+                    type: 'Copy',
+                    assignee: res,
+                    place: val
+                });
+                return { type: 'Local', value: res };
+            } else {
+                return val;
+            }
+        }
+
         function lowerStmt(stmt: Stmt) {
             switch (stmt.type) {
                 case 'FnDecl': break; // Nested bodies are only lowered when explicitly requested
@@ -1417,7 +1443,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const ty = typeck.exprTys.get(stmt.init)!;
                     const local = addLocal(ty, false);
                     astLocalToMirLocal.set(stmt, local);
-                    const value = lowerExpr(stmt.init);
+                    const value = asValue(lowerExpr(stmt.init), ty);
                     block.stmts.push({ type: 'Assignment', assignee: local, value });
                     break;
                 }
@@ -1426,7 +1452,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 default: assertUnreachable(stmt);
             }
         }
-        function lowerExpr(expr: Expr): MirValue {
+        function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
             switch (expr.type) {
                 case 'Number': return { type: 'i32', value: expr.value };
                 case 'Literal': {
@@ -1443,9 +1469,9 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                             const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
                             const assignee = addLocal(locals[id].ty, true);
                             block.stmts.push({
-                                type: 'DerefCopy',
+                                type: 'Copy',
                                 assignee,
-                                local: id
+                                place: { base: id, projections: [] }
                             });
 
                             return { type: 'Local', value: assignee };
@@ -1454,7 +1480,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
                 }
                 case 'Return': {
-                    const ret = lowerExpr(expr.value);
+                    const ret = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
                     block.stmts.push({ type: 'Assignment', assignee: returnId, value: ret });
                     block.terminator = { type: 'Return' };
                     let newBlock = { stmts: [], terminator: null };
@@ -1463,8 +1489,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return { type: 'Unreachable' };
                 }
                 case 'Binary': {
-                    const lhs = lowerExpr(expr.lhs);
-                    const rhs = lowerExpr(expr.rhs);
+                    const lhs = asValue(lowerExpr(expr.lhs), typeck.exprTys.get(expr.lhs)!);
+                    const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
                     const res = addLocal(typeck.exprTys.get(expr)!, true);
                     block.stmts.push({ type: 'BinOp', assignee: res, lhs, rhs, op: expr.op });
                     return { type: 'Local', value: res };
@@ -1485,15 +1511,12 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
                 }
                 case 'Deref': {
-                    const assignee = addLocal(typeck.exprTys.get(expr)!, true);
-                    const op = lowerExpr(expr.pointee);
-                    if (op.type !== 'Local') throw new Error('deref pointee must be a local in mir');
-                    block.stmts.push({
-                        type: 'DerefCopy',
-                        assignee,
-                        local: op.value
-                    });
-                    return { type: 'Local', value: assignee };
+                    const pointee = lowerExpr(expr.pointee);
+                    if (pointee.type !== 'Place') {
+                        throw new Error('deref pointee must be a place');
+                    }
+                    pointee.projections.push({ type: 'Deref' });
+                    return pointee;
                 }
                 case 'FnCall': {
                     const callee = lowerExpr(expr.callee);
@@ -1503,7 +1526,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const sig = typeck.instantiatedFnSigs.get(expr)!;
                     const res = addLocal(sig.ret, true);
 
-                    const args = expr.args.map(lowerExpr);
+                    const args = expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!));
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
@@ -1512,6 +1535,25 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     block = blocks[targetBlock];
 
                     return { type: 'Local', value: res };
+                }
+                case 'Property': {
+                    const val = lowerExpr(expr.target);
+                    if (val.type === 'Place') {
+                        val.projections.push({ type: 'Field', property: expr.property });
+                        return val;
+                    } else {
+                        let base: MirLocalId;
+                        if (val.type !== 'Local') {
+                            throw new Error('property base must be a local');
+                        } else {
+                            base = val.value;
+                        }
+                        return {
+                            type: 'Place',
+                            base: base,
+                            projections: [{ type: 'Field', property: expr.property }]
+                        }
+                    }
                 }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
@@ -1607,9 +1649,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     patchValue(s.lhs);
                     patchValue(s.rhs);
                     break;
-                case 'DerefCopy':
+                case 'Copy':
                     patchObjKey(s, 'assignee');
-                    patchObjKey(s, 'local');
+                    patchObjKey(s.place, 'base');
                     break;
                 case 'Return': break;
                 case 'Call':
@@ -1689,25 +1731,50 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${llValue(stmt.lhs)}, ${llValue(stmt.rhs)}\n`;
                             break;
                         }
-                        case 'DerefCopy': {
-                            const local = getLocal(stmt.local);
+                        case 'Copy': {
+                            const rawBase = mir.locals[stmt.place.base];
 
-                            let resTy: string;
-                            let srcTy: string;
-
-                            if (local.temporary) {
-                                if (local.ty.type !== 'Pointer') {
-                                    throw new Error('DerefCopy on non-pointer');
-                                } else {
-                                    srcTy = llTy(local.ty);
-                                    resTy = llTy(local.ty.pointee);
-                                }
+                            let finalLocal: string;
+                            let finalTy = llTy(rawBase.ty);
+                            if (rawBase.temporary) {
+                                // This could be e.g.:
+                                //     _ = f().v.x  where f(): {v:{x:i32}}
+                                // 
+                                // _1 = f()
+                                // _2 copy {base: _1 /* {v:{x:i32}} */, projections: ['v', 'x']}
+                                //
+                                // We generally want to codegen these projections as a series of GEP, which requires a pointer operand
+                                // so we alloca a new variable that we store the base in.
+                                const baseId = `%t.${tempLocal()}`;
+                                output += `${baseId} = alloca ${llTy(rawBase.ty)}\n`;
+                                output += `store ${llTy(rawBase.ty)} %l.${stmt.place.base}, ${llTy(rawBase.ty)}* ${baseId}`;
+                                finalLocal = baseId;
                             } else {
-                                srcTy = `${llTy(local.ty)}*`;
-                                resTy = llTy(local.ty);
+                                // If it's not a temporary, then the base is most likely a local variable.
+                                // In any case, `temporary = false` means that it must be alloca'd, so there is no need to do the above,
+                                // as we already have a pointer that we can GEP into.
+                                finalLocal = `%l.${stmt.place.base}`;
                             }
 
-                            output += `%l.${stmt.assignee} = load ${resTy}, ${srcTy} %l.${stmt.local}\n`;
+                            // For the above example f().v.x:
+                            //
+                            // ; process base:
+                            // _1 = f(): {v:{x:i32}}
+                            // _2 = alloca {v:{x:i32}}
+                            // store _1 -> _2
+                            //
+                            // ; process projections:
+                            // _3 = getelementptr {v:{x:i32}}, _2, 0, 0      ; _3 = {x: i32}*
+                            // _4 = getelementptr {x:i32}, _3, 0, 0          ; _4 = i32*
+                            //
+                            // _4 gives us the final pointer to the last projected place, the `i32`,
+                            // which we can finally copy into the assignee.
+
+                            for (const projection of stmt.place.projections) {
+                                todo("codegen projections");
+                            }
+
+                            output += `%l.${stmt.assignee} = load ${finalTy}, ${finalTy}* ${finalLocal}\n`;
                             break;
                         }
                         case 'AddrOfLocal': break; // Processed in `renameAliases`
