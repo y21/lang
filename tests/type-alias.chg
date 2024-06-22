@@ -2,15 +2,15 @@
 type Point<T> = { x: T, y: T };
 type Nested<T> = { p: Point<T> };
 
-function point<T>(x: T, y: T): Point<T> {
+fn point<T>(x: T, y: T): Point<T> {
     return .{ x: x, y: y };
 }
 
-function single<T>(v: T): Nested<T> {
+fn single<T>(v: T): Nested<T> {
     return .{ p: point(v, v) };
 }
 
-function main(): i32 {
+fn main(): i32 {
     // todo: actually use point and single here to test their codegen
     return 0;
 }

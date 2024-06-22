@@ -116,7 +116,7 @@ function ppSpan(src: string, span: Span): string {
 }
 
 enum TokenType {
-    Function,
+    Fn,
     Let,
     Return,
     Type,
@@ -211,7 +211,7 @@ function tokenize(src: string): Token[] {
                     i--;
                     let ty;
                     switch (ident) {
-                        case 'function': ty = TokenType.Function; break;
+                        case 'fn': ty = TokenType.Fn; break;
                         case 'let': ty = TokenType.Let; break;
                         case 'return': ty = TokenType.Return; break;
                         case 'mut': ty = TokenType.Mut; break;
@@ -527,7 +527,7 @@ function parse(src: string): Program {
 
     function parseStmt(): Stmt {
         switch (tokens[i].ty) {
-            case TokenType.Function: {
+            case TokenType.Fn: {
                 i++;
                 const name = expectIdent();
                 const generics = parseGenericsList();
@@ -1481,7 +1481,7 @@ function mangleInstFn(decl: FnDecl, args: Ty[]): string {
 /**
  * Instantiates a function's MIR with the given generic arguments.
  * 
- *    function f<T>(v: T) {}
+ *    fn f<T>(v: T) {}
  * 
  * calling `astToMir(f, [i32])` will create the MIR body for `function f(v: i32)`, and cache it.
  */

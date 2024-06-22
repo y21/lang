@@ -14,13 +14,13 @@ Running `npm i --save-dev && npx tsc` will give you the compiler.
 ```sh
 # it currently just reads the `input` file
 $ cat input
-function add(a: i32, b: i32): i32 {
+fn add(a: i32, b: i32): i32 {
     return a + b;
 }
-function identity<T>(v: T): T {
+fn identity<T>(v: T): T {
     return v;
 }
-function main(): i32 {
+fn main(): i32 {
     return add(identity(40), identity(2));
 }
 
@@ -42,7 +42,7 @@ $ ./a.out; echo $?
 You can also get errors
 ```sh
 $ cat input
-function main(): i32 {
+fn main(): i32 {
     return "";
 }
 

@@ -2,17 +2,17 @@ expr @ 6:18 6:19 => T
 expr @ 6:24 6:25 => T
 expr @ 6:12 6:27 => {x: T,y: T}
 expr @ 6:5 6:27 => never
-expr @ 5:41 8:0 => void
+expr @ 5:35 8:0 => void
 expr @ 10:18 10:23 => fn point(...)
 expr @ 10:24 10:25 => T
 expr @ 10:27 10:28 => T
 expr @ 10:18 10:29 => {x: T,y: T}
 expr @ 10:12 10:31 => {p: {x: T,y: T}}
 expr @ 10:5 10:31 => never
-expr @ 9:37 12:0 => void
+expr @ 9:31 12:0 => void
 expr @ 15:12 15:13 => i32
 expr @ 15:5 15:13 => never
-expr @ 13:22 17:1 => void
+expr @ 13:16 17:1 => void
 
 define i32 @main() {
 prologue:

@@ -5,10 +5,10 @@ type Vec<T> constructible(mkVec) = {
     cap: i32
 };
 
-function mkVec<T>(): Vec<T> {
+fn mkVec<T>(): Vec<T> {
     return .{ ptr: 0, len: 0, cap: 0 };
 }
 
-function main(): i32 {
+fn main(): i32 {
     return 0;
 }
