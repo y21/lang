@@ -628,10 +628,30 @@ enum PrimitiveTy {
     Never,
     I32,
 }
+
+type IntrinsicName = 'bitcast';
+type Intrinsic = ({ name: IntrinsicName }) & FnDecl;
+
+function mkIntrinsic(name: IntrinsicName, generics: Generics, parameters: FnParameter[], ret: AstTy): Intrinsic {
+    return {
+        name: name,
+        body: null as any, // The body doesn't really matter -- no pass should look into other fn bodies and codegen/mir special cases intrinsics
+        generics,
+        parameters,
+        ret,
+        type: 'FnDecl'
+    }
+}
+
+function identPathTy(ident: string): AstTy {
+    return { type: 'Path', value: { segments: [{ args: [], ident }] } };
+}
+
+const INTRINSICS: Intrinsic[] = [mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))];
 type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl };
 type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
-type ValueResolution = FnDecl | LetDecl | ({ type: 'FnParam', param: FnParameter });
+type ValueResolution = FnDecl | LetDecl | ({ type: 'FnParam', param: FnParameter }) | { type: 'Intrinsic', value: Intrinsic };
 type ValueResolutions = Map<Expr, ValueResolution>;
 type Resolutions = { tyResolutions: TypeResolutions, valueResolutions: ValueResolutions, entrypoint: FnDecl };
 
@@ -754,26 +774,41 @@ function computeResolutions(ast: Program): Resolutions {
         }
     }
 
+    function resolveFnDeclHeader(decl: FnDecl) {
+        for (let i = 0; i < decl.generics.length; i++) {
+            tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentItem: decl });
+        }
+
+        for (const param of decl.parameters) {
+            valRes.add(param.name, { type: 'FnParam', param });
+            resolveTy(param.ty);
+        }
+        resolveTy(decl.ret);
+    }
+
     function resolveFnDecl(decl: FnDecl) {
+        if (INTRINSICS.some(ins => ins.name === decl.name)) {
+            throw new Error(`function cannot have name '${decl.name}' because it is the name of an intrinsic`);
+        }
         valRes.add(decl.name, decl);
         valRes.withScope(() => {
             tyRes.withScope(() => {
-                for (let i = 0; i < decl.generics.length; i++) {
-                    tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentItem: decl });
-                }
-
-                for (const param of decl.parameters) {
-                    valRes.add(param.name, { type: 'FnParam', param });
-                    resolveTy(param.ty);
-                }
-
-                resolveTy(decl.ret);
+                resolveFnDeclHeader(decl);
                 resolveExpr(decl.body);
             });
         });
     }
 
     valRes.withScope(() => {
+        for (const intrinsic of INTRINSICS) {
+            valRes.add(intrinsic.name, { type: 'Intrinsic', value: intrinsic });
+            valRes.withScope(() => {
+                tyRes.withScope(() => {
+                    resolveFnDeclHeader(intrinsic);
+                });
+            });
+        }
+
         tyRes.withScope(() => {
             for (const stmt of ast.stmts) {
                 if (stmt.type === 'FnDecl' && stmt.name === 'main') {
@@ -1124,9 +1159,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Literal': {
                     const litres = res.valueResolutions.get(expr)!;
                     switch (litres.type) {
+                        // TODO: is EMPTY_FLAGS correct here..?
                         case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'LetDecl': return infcx.localTy(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
+                        case 'Intrinsic': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres.value };
                         default: assertUnreachable(litres);
                     }
                 }
@@ -1418,7 +1455,8 @@ type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporar
 type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValue }
     | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
-    | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> };
+    | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> }
+    | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
 type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId };
 type MirBlock = {
@@ -1577,6 +1615,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
 
                             return { type: 'Local', value: assignee };
                         }
+                        case 'Intrinsic': throw new Error('intrinsics must be called immediately'); // Handled in 'Call'
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -1620,11 +1659,28 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return pointee;
                 }
                 case 'FnCall': {
+                    const sig = typeck.instantiatedFnSigs.get(expr)!;
+
+                    // calls to intrinsics are special cased
+                    if (expr.callee.type === 'Literal') {
+                        const res = resolutions.valueResolutions.get(expr.callee)!;
+                        if (res.type === 'Intrinsic') {
+                            switch (res.value.name) {
+                                case 'bitcast': {
+                                    const assignee = addLocal(sig.ret, true);
+                                    const value = asValue(lowerExpr(expr.args[0]), sig.parameters[0]);
+                                    block.stmts.push({ type: 'Bitcast', assignee, from_ty: sig.parameters[0], to_ty: sig.ret, value });
+                                    return { type: 'Local', value: assignee };
+                                }
+                                default: assertUnreachable(res.value.name);
+                            }
+                        }
+                    }
+
                     const callee = lowerExpr(expr.callee);
                     if (callee.type !== 'FnDef') {
                         throw new Error('callee must be a FnDef');
                     }
-                    const sig = typeck.instantiatedFnSigs.get(expr)!;
                     const res = addLocal(sig.ret, true);
 
                     const args = expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!));
@@ -1759,6 +1815,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 case 'Return': break;
                 case 'Call':
                     s.args.forEach(patchValue);
+                    break;
+                case 'Bitcast':
+                    patchObjKey(s, 'assignee');
+                    patchValue(s.value);
                     break;
                 default: assertUnreachable(s);
             }
@@ -1934,6 +1994,23 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             break;
                         }
                         case 'AddrOfLocal': throw new Error('AddrOfLocal should be handled in renameAliases');
+                        case 'Bitcast':
+                            // compile bitcast<i64, i8*>(0) to
+                            //
+                            // %tmp = alloca i64
+                            // store i64 0, i64* %tmp
+                            // %tmp.1 = bitcast i64* %tmp to i8**
+                            // %res = load i8*, i8** %tmp.1
+                            const fromTyS = llTy(stmt.from_ty);
+                            const toTyS = llTy(stmt.to_ty);
+                            const castSource = compileValueToLocal(stmt.value);
+                            const castSourcePtr = `%t.${tempLocal()}`;
+                            output += `${castSourcePtr} = alloca ${fromTyS}\n`;
+                            output += `store ${fromTyS} ${castSource}, ${fromTyS}* ${castSourcePtr}\n`;
+                            const bitcastPtr = `%t.${tempLocal()}`;
+                            output += `${bitcastPtr} = bitcast ${fromTyS}* ${castSourcePtr} to ${toTyS}*\n`;
+                            output += `%l.${stmt.assignee} = load ${toTyS}, ${toTyS}* ${bitcastPtr}\n`;
+                            break;
                         default: assertUnreachable(stmt);
                     }
                 }

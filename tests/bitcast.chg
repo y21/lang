@@ -1,0 +1,7 @@
+fn t1(): i32 { return bitcast(1); }
+fn t2(): i32 { return bitcast(.{ x: 2 }); }
+fn t3(): { x:i32 } { return bitcast(3); }
+
+fn main(): i32 {
+    return t1() + t2() + t3().x;
+}
