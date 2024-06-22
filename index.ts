@@ -2,8 +2,8 @@ import fs from 'fs';
 import cProcess from 'child_process';
 import { inspect as _inspect } from 'util';
 
-function inspect(v: any): string {
-    return _inspect(v, { depth: Infinity, colors: true });
+function inspect(v: any, forceColors = true): string {
+    return _inspect(v, { depth: Infinity, colors: forceColors });
 }
 
 function assertUnreachable(v: never): never {
@@ -14,10 +14,102 @@ function todo(what?: string): never {
     throw new Error('Todo: ' + what);
 }
 
+type OptLevel = '-O0' | '-O1' | '-O2' | '-O3' | '-O';
+type CliOptions = {
+    path: string,
+    /**
+     * When this is true, skip the `clang` step and just print the LLVM IR (the very last IR we generate) to the console.
+     * Currently only used for tests
+     */
+    printLlirOnly: boolean;
+    optLevel: OptLevel,
+    verbose: boolean,
+    timings: boolean;
+};
+
+function parseOptions(): CliOptions {
+    let path: string | null = null;
+    let optLevel: OptLevel = '-O0';
+    let verbose = false;
+    let printLlirOnly = false;
+    let timings = true;
+    const args = process.argv.slice(2).values();
+
+    let opt: IteratorResult<string>;
+    while (!(opt = args.next()).done) {
+        switch (opt.value) {
+            case '-O3':
+            case '-O2':
+            case '-O1':
+            case '-O0':
+            case '-O': optLevel = opt.value; break;
+            case '--print-llir-only': printLlirOnly = true; break;
+            case '--no-timings': timings = false; break;
+            case '--verbose': verbose = true; break;
+            default:
+                if (path) {
+                    throw new Error('cannot specify an input path twice');
+                }
+                path = opt.value;
+                break;
+        }
+    }
+
+    path ||= 'input';
+
+    return { path, optLevel, verbose, printLlirOnly, timings };
+}
+const options = parseOptions();
+
 type Span = [number, number];
 
 function joinSpan(a: Span, b: Span): Span {
     return [a[0], b[1]];
+}
+
+// zero-based
+type SpanInfo = { fromLine: number, fromCol: number, toLine: number, toCol: number };
+function spanInfo(src: string, span: Span): SpanInfo {
+    let prevLineStart = 0;
+    let line = 0;
+    while (prevLineStart < src.length) {
+        const nextNewLine = src.indexOf('\n', prevLineStart);
+        assert(nextNewLine > -1);
+        let fromLine: number, fromCol: number, toLine: number | null = null, toCol: number | null = null;
+        if (nextNewLine > span[0]) {
+            fromLine = line;
+            fromCol = span[0] - prevLineStart;
+
+            while (prevLineStart < src.length) {
+                const nextNewLine = src.indexOf('\n', prevLineStart);
+                assert(nextNewLine > -1);
+                if (nextNewLine > span[1]) {
+                    toLine = line;
+                    toCol = span[1] - prevLineStart;
+                    break;
+                }
+                prevLineStart = nextNewLine + 1;
+                line++;
+            }
+
+            if (toCol === null || toLine === null) {
+                // span end points to the end of the file
+                toLine = line;
+                toCol = src.length - prevLineStart;
+            }
+
+            return { fromCol, fromLine, toCol, toLine };
+        }
+
+        prevLineStart = nextNewLine + 1;
+        line++;
+    }
+    throw new Error('malformed span');
+}
+
+function ppSpan(src: string, span: Span): string {
+    const inf = spanInfo(src, span);
+    return `${inf.fromLine + 1}:${inf.fromCol + 1} ${inf.toLine + 1}:${inf.toCol + 1}`;
 }
 
 enum TokenType {
@@ -840,6 +932,9 @@ class Infcx {
     }
 }
 
+/**
+ * Pretty prints a type. This is *exclusively* for error reporting.
+ */
 function ppTy(ty: Ty): string {
     switch (ty.type) {
         case 'i32':
@@ -853,7 +948,7 @@ function ppTy(ty: Ty): string {
             return `${ppTy(ty.pointee)}*`
         case 'TyParam': return ty.parentItem.generics[ty.id];
         case 'TyVid': return `?${ty.id}t`;
-        case 'FnDef': todo('pretty print fndef');
+        case 'FnDef': return `fn ${ty.decl.name}(...)`;
         case 'Record': {
             let out = '{';
             for (let i = 0; i < ty.fields.length; i++) {
@@ -1879,26 +1974,36 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 }
 
 function timed<T>(what: string, f: () => T): T {
-    console.time(what);
-    const res = f();
-    console.timeEnd(what);
-    return res;
+    if (options.timings) {
+        console.time(what);
+        const res = f();
+        console.timeEnd(what);
+        return res;
+    } else {
+        return f();
+    }
 }
 
-const src = fs.readFileSync('./input', 'utf8');
+const src = fs.readFileSync(options.path, 'utf8');
 const ast = timed('parse', () => parse(src));
 const resolutions = timed('name res', () => computeResolutions(ast));
 const tyres = timed('typeck', () => typeck(src, ast, resolutions));
+if (options.verbose) {
+    tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(src, k.span)} => ${ppTy(v)}`));
+    console.log();
+}
 const llir = timed('llir/mir codegen', () => codegen(src, ast, resolutions, tyres));
 
-const llpath = `/tmp/tmpir${Date.now()}.ll`;
-fs.writeFileSync(llpath, llir);
-console.log('IR path:', llpath);
-// TODO: don't use -Wno-override-module
-timed('clang', () => cProcess.spawnSync(`clang -Wno-override-module ${llpath}`, {
-    shell: true,
-    stdio: 'inherit'
-}));
+if (options.printLlirOnly) {
+    console.log(llir);
+} else {
+    const llpath = `/tmp/tmpir${Date.now()}.ll`;
+    fs.writeFileSync(llpath, llir);
+    // TODO: don't use -Wno-override-module
+    timed('clang', () => cProcess.spawnSync(`clang ${options.optLevel} -Wno-override-module ${llpath}`, {
+        shell: true,
+        stdio: 'inherit'
+    }));
+    fs.unlinkSync(llpath);
+}
 
-console.log();
-console.log('\x1b[1;32mcompilation succeeded\x1b[0m');
