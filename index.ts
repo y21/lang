@@ -1195,6 +1195,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 const sup = infcx.tryResolve(constraint.sup);
 
                 function subFields(sub: Ty & RecordType, sup: Ty & RecordType) {
+                    // TODO: this probably needs to check the order too...
                     if (sub.fields.length !== sup.fields.length) {
                         // Fast fail: no point in comparing fields when they lengths don't match.
                         error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
@@ -1305,7 +1306,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 type MirValue = { type: 'i32', value: number }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
-    | { type: 'FnDef', value: FnDecl };
+    | { type: 'FnDef', value: FnDecl }
+    | { type: 'Record', value: RecordFields<MirValue> };
 /**
  * `temporary` indicates whether this local is used for a subexpression.
  * These are trivially in SSA form and are never written to except when initialized.
@@ -1555,6 +1557,15 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         }
                     }
                 }
+                case 'Record': {
+                    const fields: RecordFields<MirValue> = expr.fields.map(([key, expr]) => {
+                        return [key, asValue(lowerExpr(expr), typeck.exprTys.get(expr)!)];
+                    });
+                    return {
+                        type: 'Record',
+                        value: fields
+                    }
+                }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
         }
@@ -1593,8 +1604,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'FnDef':
             case 'Array':
             case 'Alias':
-            case 'Record':
                 todo(ty.type);
+            case 'Record': return '{' + ty.fields.map(v => llTy(v[1])).join(', ') + '}';
             case 'TyVid':
             case 'never':
                 throw new Error(`${ty.type} should not appear in llir lowering`);
@@ -1605,14 +1616,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
         return mir.locals[id] as MirLocal<temporary>;
     }
 
-    function llValue(val: MirValue): string {
-        switch (val.type) {
-            case 'Local': return `%l.${val.value}`;
-            case 'i32': return val.value.toString();
-            case 'Unreachable': return 'poison';
-            case 'FnDef': throw new Error('FnDef values need to be treated specially');
-        }
-    }
 
     function llValTy(mir: MirBody, val: MirValue): string {
         switch (val.type) {
@@ -1627,6 +1630,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'i32': return 'i32';
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef': throw new Error('FnDef values need to be treated specially');
+            case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
         }
     }
 
@@ -1683,6 +1687,44 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
 
             let output = `define ${llTy(ret)} @${mangledName}(${parameterList}) {\n`;
+
+            function compileValueToLocal(val: MirValue): string {
+                switch (val.type) {
+                    case 'Local': return `%l.${val.value}`;
+                    case 'i32': return val.value.toString();
+                    case 'Unreachable': return 'poison';
+                    case 'FnDef': throw new Error('FnDef values need to be treated specially');
+                    case 'Record': {
+                        // compile {x: 1i32, y: 2i64} to:
+                        //
+                        // %t1 = alloca {i32, i64}
+                        // %p1 = getelementptr {i32, i64}, {i32, i64}* %t1, i32 0, i32 0
+                        // store i32 1, i32* %p1
+                        // %p1 = getelementptr {i32, i64}, {i32, i64}* %t1, i32 0, i32 1
+                        // store i32 2, i32* %p1
+                        // %t3 = load %t1
+                        // return %t3
+                        const tyS = llValTy(mir, val);
+                        const tmp = `%t.${tempLocal()}`;
+                        // note: write it to a temporary string first and then append it later, since we might potentially have interleaving writes to `output`
+                        // during calls to `compileValueToLocal`
+                        let tmpOut = '';
+                        tmpOut += `${tmp} = alloca ${tyS}\n`;
+                        for (let i = 0; i < val.value.length; i++) {
+                            const ptrLocal = `%p.${tempLocal()}`;
+                            const valueS = compileValueToLocal(val.value[i][1]);
+                            const valTyS = llValTy(mir, val.value[i][1]);
+                            tmpOut += `${ptrLocal} = getelementptr ${tyS}, ${tyS}* ${tmp}, i32 0, i32 ${i}\n`;
+                            tmpOut += `store ${valTyS} ${valueS}, ${valTyS}* ${ptrLocal}\n`;
+                        }
+                        const loadLocal = `%t.${tempLocal()}`;
+                        tmpOut += `${loadLocal} = load ${tyS}, ${tyS}* ${tmp}\n`;
+                        output += tmpOut;
+                        return loadLocal;
+                    }
+                }
+            }
+
             let writeBB = (name: string) => output += name + ':\n';
 
             // Prologue: alloca locals for explicit, real locals
@@ -1717,7 +1759,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     switch (stmt.type) {
                         case 'Assignment': {
                             const local = getLocal(stmt.assignee);
-                            output += `store ${llValTy(mir, stmt.value)} ${llValue(stmt.value)}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
+                            const valS = compileValueToLocal(stmt.value);
+                            output += `store ${llValTy(mir, stmt.value)} ${valS}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
                             break;
                         }
                         case 'BinOp': {
@@ -1728,26 +1771,28 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 case TokenType.Star: binOp = 'mul'; break;
                                 default: todo('BinOp ' + stmt.op);
                             }
-                            output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${llValue(stmt.lhs)}, ${llValue(stmt.rhs)}\n`;
+                            const lhsS = compileValueToLocal(stmt.lhs);
+                            const rhsS = compileValueToLocal(stmt.rhs);
+                            output += `%l.${stmt.assignee} = ${binOp} ${llValTy(mir, stmt.lhs)} ${lhsS}, ${rhsS}\n`;
                             break;
                         }
                         case 'Copy': {
                             const rawBase = mir.locals[stmt.place.base];
 
                             let finalLocal: string;
-                            let finalTy = llTy(rawBase.ty);
+                            let finalTy = rawBase.ty;
                             if (rawBase.temporary) {
                                 // This could be e.g.:
                                 //     _ = f().v.x  where f(): {v:{x:i32}}
                                 // 
                                 // _1 = f()
-                                // _2 copy {base: _1 /* {v:{x:i32}} */, projections: ['v', 'x']}
+                                // _2 = copy {base: _1 /* {v:{x:i32}} */, projections: ['v', 'x']}
                                 //
                                 // We generally want to codegen these projections as a series of GEP, which requires a pointer operand
                                 // so we alloca a new variable that we store the base in.
                                 const baseId = `%t.${tempLocal()}`;
                                 output += `${baseId} = alloca ${llTy(rawBase.ty)}\n`;
-                                output += `store ${llTy(rawBase.ty)} %l.${stmt.place.base}, ${llTy(rawBase.ty)}* ${baseId}`;
+                                output += `store ${llTy(rawBase.ty)} %l.${stmt.place.base}, ${llTy(rawBase.ty)}* ${baseId}\n`;
                                 finalLocal = baseId;
                             } else {
                                 // If it's not a temporary, then the base is most likely a local variable.
@@ -1771,13 +1816,25 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             // which we can finally copy into the assignee.
 
                             for (const projection of stmt.place.projections) {
-                                todo("codegen projections");
+                                if (projection.type === 'Deref') todo('deref projections');
+
+                                const oldBase = finalLocal;
+                                const oldTy = finalTy;
+                                finalLocal = `%t.${tempLocal()}`;
+                                if (oldTy.type !== 'Record') {
+                                    throw new Error('projection target must be a record type');
+                                }
+                                const oldTyS = llTy(oldTy);
+
+                                const projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
+                                finalTy = oldTy.fields[projectedIndex][1];
+                                output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
                             }
 
-                            output += `%l.${stmt.assignee} = load ${finalTy}, ${finalTy}* ${finalLocal}\n`;
+                            output += `%l.${stmt.assignee} = load ${llTy(finalTy)}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
                         }
-                        case 'AddrOfLocal': break; // Processed in `renameAliases`
+                        case 'AddrOfLocal': throw new Error('AddrOfLocal should be handled in renameAliases');
                         default: assertUnreachable(stmt);
                     }
                 }
@@ -1789,14 +1846,15 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         case 'Return':
                             const temp = tempLocal();
                             output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
-                            output += `ret ${llTy(ret)} %ret.${temp}`;
+                            output += `ret ${llTy(ret)} %ret.${temp}\n`;
                             break;
                         case 'Call':
                             const calleeMangled = mangleInstFn(terminator.decl, terminator.sig.args);
                             codegenFn(terminator.decl, terminator.sig.args);
-                            const argList = terminator.args.map(arg => `${llValTy(mir, arg)} ${llValue(arg)}`).join(', ');
+                            // NB: don't write to `output` here before the `argList` mapping, since that may compile values
+                            const argList = terminator.args.map(arg => `${llValTy(mir, arg)} ${compileValueToLocal(arg)}`).join(', ');
                             output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${calleeMangled}(${argList})\n`;
-                            output += `br label %bb.${terminator.target}`;
+                            output += `br label %bb.${terminator.target}\n`;
                             break;
                         default: assertUnreachable(terminator)
                     }
