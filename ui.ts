@@ -65,3 +65,5 @@ async function processDir(path: string) {
 processDir('./tests').then(() => {
     console.log(`${pass} tests passed, ${fail} tests failed`);
 });
+
+if (fail > 0) process.exit(1);
