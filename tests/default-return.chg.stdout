@@ -1,0 +1,39 @@
+expr @ 2:13 2:14 => i32
+expr @ 1:10 4:0 => ()
+expr @ 5:5 5:8 => fn foo(...)
+expr @ 5:5 5:10 => ()
+expr @ 4:11 7:1 => ()
+
+
+
+define {} @foo() {
+prologue:
+%l.0 = alloca {}
+%l.1 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 1, i32* %l.1
+store {} {}, {}* %l.0
+%ret.0 = load {}, {}* %l.0
+ret {} %ret.0
+
+}
+
+define {} @main() {
+prologue:
+%l.0 = alloca {}
+br label %bb.0
+
+bb.0:
+%l.1 = call {} @foo()
+br label %bb.1
+
+bb.1:
+store {} {}, {}* %l.0
+%ret.0 = load {}, {}* %l.0
+ret {} %ret.0
+
+}
+
+

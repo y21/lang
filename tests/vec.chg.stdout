@@ -5,10 +5,10 @@ expr @ 9:37 9:38 => i32
 expr @ 9:45 9:46 => i32
 expr @ 9:12 9:48 => {ptr: T*,len: i32,cap: i32}
 expr @ 9:5 9:48 => never
-expr @ 8:23 11:0 => void
+expr @ 8:23 11:0 => ()
 expr @ 13:12 13:13 => i32
 expr @ 13:5 13:13 => never
-expr @ 12:41 15:0 => void
+expr @ 12:41 15:0 => ()
 expr @ 17:15 17:20 => fn mkVec(...)
 expr @ 17:15 17:22 => Vec<i32>
 expr @ 18:5 18:9 => fn push(...)
@@ -18,7 +18,7 @@ expr @ 18:16 18:18 => i32
 expr @ 18:5 18:19 => i32
 expr @ 19:12 19:13 => i32
 expr @ 19:5 19:13 => never
-expr @ 16:16 21:1 => void
+expr @ 16:16 21:1 => ()
 
 
 
