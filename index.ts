@@ -304,7 +304,7 @@ type UnaryOp = TokenType.Not;
 
 type Expr = { span: Span } & (
     | { type: "Block"; stmts: Stmt[] }
-    | { type: "Literal"; ident: string }
+    | { type: "Literal"; ident: string, args: AstTy[] | null }
     | { type: "FnCall"; args: Expr[]; callee: Expr }
     | { type: "Index"; target: Expr; index: Expr }
     | { type: "ArrayLiteral"; elements: Expr[] }
@@ -362,7 +362,8 @@ type AstTy = { type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
     | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
     | { type: 'Record', fields: RecordFields<AstTy> }
-    | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] };
+    | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] }
+    | { type: 'Infer' };
 type Program = { stmts: Stmt[] };
 type LeftToRight = 'ltr';
 type RightToLeft = 'rtl';
@@ -526,7 +527,22 @@ function parse(src: string): Program {
                 break;
             }
             case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip([tokens[i].span[0] + 1, tokens[i].span[1] - 1]) }; break;
-            case TokenType.Ident: expr = { type: 'Literal', span: tokens[i].span, ident: snip(tokens[i].span) }; break;
+            case TokenType.Ident:
+                let ident = snip(tokens[i].span);
+                let args: AstTy[] | null;
+                if (tokens[i + 1].ty === TokenType.Colon && tokens[i + 2].ty === TokenType.Colon) {
+                    i += 3;
+                    eatToken(TokenType.Lt, true);
+                    args = [];
+                    while (!eatToken(TokenType.Gt, false)) {
+                        if (args.length > 0) eatToken(TokenType.Comma, true);
+                        args.push(parseTy());
+                    }
+                    i--;
+                } else {
+                    args = null;
+                }
+                expr = { type: 'Literal', span: tokens[i].span, ident, args }; break;
             case TokenType.True: expr = { type: 'Bool', span: tokens[i].span, value: true }; break;
             case TokenType.False: expr = { type: 'Bool', span: tokens[i].span, value: false }; break;
             case TokenType.Dot: {
@@ -907,6 +923,7 @@ function computeResolutions(ast: Program): Resolutions {
                 break;
             case 'Alias':
                 resolveTy(ty.alias); break;
+            case 'Infer': break;
             default: assertUnreachable(ty);
         }
     }
@@ -950,7 +967,12 @@ function computeResolutions(ast: Program): Resolutions {
 
     function resolveExpr(expr: Expr) {
         switch (expr.type) {
-            case 'Literal': registerRes(expr.ident, expr, valRes, identMap); break;
+            case 'Literal':
+                registerRes(expr.ident, expr, valRes, identMap);
+                if (expr.args) {
+                    for (const arg of expr.args) resolveTy(arg);
+                }
+                break;
             case 'Block': for (const stmt of expr.stmts) resolveStmt(stmt); break;
             case 'Return': resolveExpr(expr.value); break;
             case 'ArrayLiteral': for (const e of expr.elements) resolveExpr(e); break;
@@ -1443,6 +1465,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     return { type: 'Record', flags, fields };
                 }
                 case 'Alias': throw new Error('cannot lower type aliases directly');
+                case 'Infer': throw new Error('cannot lower `_` here');
                 default: assertUnreachable(ty);
             }
         }
@@ -1588,9 +1611,13 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             args: []
                         };
 
-                        for (let i = 0; i < callee.decl.sig.generics.length; i++) {
-                            const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
-                            sig.args.push(tv);
+                        if (expr.callee.type === 'Literal' && expr.callee.args !== null) {
+                            sig.args = expr.callee.args.map(ty => lowerTy(ty));
+                        } else {
+                            for (let i = 0; i < callee.decl.sig.generics.length; i++) {
+                                const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
+                                sig.args.push(tv);
+                            }
                         }
 
                         // with `genericArgs` created we can fix up the signature
