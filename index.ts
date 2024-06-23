@@ -1761,9 +1761,6 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
          */
         function asValue(val: ({ type: 'Place' } & MirPlace<boolean>) | MirValue, ty: Ty): MirValue {
             if (val.type === 'Place') {
-                // Trivial case: base is already a non-temporary local with no projections. E.g. simply `x`
-                if (!locals[val.base].temporary && val.projections.length === 0) return { type: 'Local', value: val.base };
-
                 const res = addLocal(ty, true);
                 block.stmts.push({
                     type: 'Copy',
@@ -1808,14 +1805,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         case 'FnParam':
                         case 'LetDecl': {
                             const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
-                            const assignee = addLocal(locals[id].ty, true);
-                            block.stmts.push({
-                                type: 'Copy',
-                                assignee,
-                                place: { base: id, projections: [] }
-                            });
-
-                            return { type: 'Local', value: assignee };
+                            return { type: 'Place', base: id, projections: [] };
                         }
                         case 'Intrinsic': throw new Error('intrinsics must be called immediately'); // Handled in 'Call'
                         default: assertUnreachable(resolution);
@@ -1853,7 +1843,9 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
                 }
                 case 'Assignment': {
-                    const assignee = lowerExpr(expr.target);
+                    let assignee = lowerExpr(expr.target);
+                    if (assignee.type === 'Local') assignee = { type: 'Place', base: assignee.value, projections: [] };
+
                     if (assignee.type !== 'Place') {
                         throw new Error('assignment LHS must be a place expression');
                     }

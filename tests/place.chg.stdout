@@ -1,0 +1,40 @@
+expr @ 2:19 2:20 => i32
+expr @ 2:13 2:22 => {a: i32}
+expr @ 3:11 3:12 => {a: i32}
+expr @ 3:11 3:14 => i32
+expr @ 3:17 3:18 => i32
+expr @ 3:11 3:18 => i32
+expr @ 3:5 3:6 => {a: i32}
+expr @ 3:5 3:8 => i32
+expr @ 3:5 3:18 => void
+expr @ 4:12 4:13 => {a: i32}
+expr @ 4:12 4:15 => i32
+expr @ 4:5 4:15 => never
+expr @ 1:16 6:1 => void
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca {i32}
+br label %bb.0
+
+bb.0:
+%t.0 = alloca {i32}
+%p.1 = getelementptr {i32}, {i32}* %t.0, i32 0, i32 0
+store i32 1, i32* %p.1
+%t.2 = load {i32}, {i32}* %t.0
+store {i32} %t.2, {i32}* %l.1
+%t.3 = getelementptr {i32}, {i32}* %l.1, i32 0, i32 0
+%l.2 = load i32, i32* %t.3
+%l.3 = add i32 %l.2, 1
+%t.4 = getelementptr {i32}, {i32}* %l.1, i32 0, i32 0
+store i32 %l.3, i32* %t.4
+%t.5 = getelementptr {i32}, {i32}* %l.1, i32 0, i32 0
+%l.4 = load i32, i32* %t.5
+store i32 %l.4, i32* %l.0
+%ret.6 = load i32, i32* %l.0
+ret i32 %ret.6
+
+}
+
+
