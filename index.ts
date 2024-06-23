@@ -849,6 +849,9 @@ function hasTyParam(ty: Ty): boolean {
 function withoutTyParam(flags: TypeFlags): TypeFlags {
     return flags & ~TYPARAM_MASK;
 }
+function withoutTyVid(flags: TypeFlags): TypeFlags {
+    return flags & ~TYVID_MASK;
+}
 function hasTyVid(ty: Ty): boolean {
     return (ty.flags & TYVID_MASK) !== 0;
 }
@@ -884,12 +887,14 @@ type InstantiatedFnSig = {
 type InfTyVar = {
     constrainedTy: Ty | null,
     origin: TyVarOrigin,
-    // When constraining this inference variable to a concrete type, then we may need to insert new types into the `exprTys` map
-    deferredExprs: Expr[],
-    // Same as with `deferredExprs`, but will replace any affected inference variables in this `InstantiatedFnSig`
-    dereferredInsts: InstantiatedFnSig[]
 };
-type TyVarOrigin = { span: Span } & ({ type: 'Expr' } | { type: 'GenericArg' });
+type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span });
+function tyVarOriginSpan(origin: TyVarOrigin): Span {
+    switch (origin.type) {
+        case 'Expr': return origin.expr.span;
+        case 'GenericArg': return origin.span;
+    }
+}
 type LUBResult = { hadErrors: boolean };
 
 class Infcx {
@@ -906,14 +911,12 @@ class Infcx {
 
     mkTyVar(origin: TyVarOrigin): Ty {
         const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, deferredExprs: [], dereferredInsts: [], origin });
-        return { type: 'TyVid', flags: EMPTY_FLAGS, id };
-    }
-
-    mkTyVarExt(origin: TyVarOrigin, deferredExprs: Expr[], dereferredInsts: InstantiatedFnSig[]): Ty {
-        const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, deferredExprs, dereferredInsts, origin });
-        return { type: 'TyVid', flags: EMPTY_FLAGS, id };
+        this.tyVars.push({ constrainedTy: null, origin });
+        const ty: Ty = { type: 'TyVid', flags: TYVID_MASK, id };
+        if (origin.type === 'Expr') {
+            this.exprTys.set(origin.expr, ty);
+        }
+        return ty;
     }
 
     withFn(expect: Ty, localTypes: Map<LetDecl | FnParameter, Ty>, f: () => void) {
@@ -940,13 +943,13 @@ class Infcx {
         this.sub('Return', at, ty, sup);
     }
 
-    deferExprTy(ty: { type: 'TyVid', id: number }, expr: Expr) {
-        this.tyVars[ty.id].deferredExprs.push(expr);
-    }
+    // deferExprTy(ty: { type: 'TyVid', id: number }, expr: Expr) {
+    //     this.tyVars[ty.id].deferredExprs.push(expr);
+    // }
 
-    deferInstSig(ty: { type: 'TyVid', id: number }, sig: InstantiatedFnSig) {
-        this.tyVars[ty.id].dereferredInsts.push(sig);
-    }
+    // deferInstSig(ty: { type: 'TyVid', id: number }, sig: InstantiatedFnSig) {
+    //     this.tyVars[ty.id].dereferredInsts.push(sig);
+    // }
 
     tryResolve(ty: Ty): Ty {
         if (ty.type === 'TyVid' && this.tyVars[ty.id].constrainedTy) {
@@ -1015,7 +1018,7 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
             const instArgs: Ty[] = [];
             for (const arg of ty.args) {
                 const inst = instantiateTy(arg, args);
-                flags |= withoutTyParam(inst.flags);
+                flags |= inst.flags;
                 instArgs.push(inst);
             }
             return {
@@ -1036,12 +1039,12 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
             return args[ty.id];
         case 'Array': {
             const elemTy = instantiateTy(ty, args);
-            return { ...ty, flags: withoutTyParam(elemTy.flags), elemTy };
+            return { ...ty, flags: elemTy.flags, elemTy };
         }
-        case 'FnDef': throw new Error('attempted to instantiate FnDef'); break;
+        case 'FnDef': throw new Error('attempted to instantiate FnDef');
         case 'Pointer': {
             const pointee = instantiateTy(ty.pointee, args);
-            return { ...ty, flags: withoutTyParam(pointee.flags), pointee };
+            return { ...ty, flags: pointee.flags, pointee };
         }
         case 'Record': {
             let flags = EMPTY_FLAGS;
@@ -1049,7 +1052,7 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
 
             for (const [key, value] of ty.fields) {
                 const ty = instantiateTy(value, args);
-                flags |= withoutTyParam(ty.flags);
+                flags |= ty.flags;
                 fields.push([key, ty]);
             }
 
@@ -1070,6 +1073,55 @@ function normalize(ty: Ty): Ty {
     }
 
     return ty;
+}
+
+function forEachExprInStmt(stmt: Stmt, f: (e: Expr) => void) {
+    switch (stmt.type) {
+        case 'Expr': forEachExpr(stmt.value, f); break;
+        case 'FnDecl': forEachExpr(stmt.body, f); break;
+        case 'LetDecl': forEachExpr(stmt.init, f); break;
+        case 'TyAlias': break;
+    }
+}
+
+function forEachExpr(expr: Expr, f: (e: Expr) => void) {
+    f(expr);
+
+    switch (expr.type) {
+        case 'Literal':
+        case 'Number':
+        case 'String': break;
+        case 'Block': for (const stmt of expr.stmts) forEachExprInStmt(stmt, f); break;
+        case 'Return': forEachExpr(expr.value, f); break;
+        case 'ArrayLiteral': for (const elem of expr.elements) forEachExpr(elem, f); break;
+        case 'Assignment':
+            forEachExpr(expr.target, f);
+            forEachExpr(expr.value, f);
+            break;
+        case 'Index':
+            forEachExpr(expr.target, f);
+            forEachExpr(expr.index, f);
+            break;
+        case 'Binary':
+            forEachExpr(expr.lhs, f);
+            forEachExpr(expr.rhs, f);
+            break;
+        case 'AddrOf': forEachExpr(expr.pointee, f); break;
+        case 'Deref': forEachExpr(expr.pointee, f); break;
+        case 'Record':
+            for (const [, field] of expr.fields) {
+                forEachExpr(field, f)
+            }
+            break;
+        case 'FnCall':
+            forEachExpr(expr.callee, f);
+            for (const arg of expr.args) forEachExpr(arg, f);
+            break;
+        case 'Property':
+            forEachExpr(expr.target, f);
+            break;
+        default: assertUnreachable(expr);
+    }
 }
 
 function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
@@ -1176,7 +1228,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'ArrayLiteral': {
                     let elemTy: Ty;
                     if (expr.elements.length === 0) {
-                        elemTy = infcx.mkTyVar({ type: "Expr", span: expr.span });
+                        elemTy = infcx.mkTyVar({ type: "Expr", expr });
                     } else {
                         elemTy = typeckExpr(expr.elements[0]);
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
@@ -1242,7 +1294,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         };
 
                         for (let i = 0; i < callee.decl.generics.length; i++) {
-                            const tv = infcx.mkTyVarExt({ type: 'GenericArg', span: expr.span }, [], [sig]);
+                            const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
                             sig.args.push(tv);
                         }
 
@@ -1283,12 +1335,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             }
         }
         const t = inner(expr);
-        if (t.type === 'TyVid') {
-            // Type variables are later inserted when the least-upper type is computed based on the constraints.
-            infcx.deferExprTy(t, expr);
-        } else {
-            infcx.exprTys.set(expr, t);
-        }
+        infcx.exprTys.set(expr, t);
         return t;
     }
 
@@ -1304,23 +1351,6 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             assert(infcx.tyVars[vid].constrainedTy === null, 'tried to constrain the same TyVid twice');
             remainingInferVars--;
             infcx.tyVars[vid].constrainedTy = ty;
-
-            const resolve = (ty: Ty): Ty => {
-                return ty.type === 'TyVid' && ty.id === vid ? infcx.tyVars[vid].constrainedTy! : ty;
-            };
-
-            for (const expr of infcx.tyVars[vid].deferredExprs) {
-                infcx.exprTys.set(expr, ty);
-            }
-            for (const sig of infcx.tyVars[vid].dereferredInsts) {
-                for (let i = 0; i < sig.args.length; i++) {
-                    sig.args[i] = resolve(sig.args[i]);
-                }
-                for (let i = 0; i < sig.parameters.length; i++) {
-                    sig.parameters[i] = resolve(sig.parameters[i]);
-                }
-                sig.ret = resolve(sig.ret);
-            }
             madeProgress = true;
         };
 
@@ -1430,7 +1460,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
         if (remainingInferVars > 0) {
             for (const tyvar of infcx.tyVars) {
                 if (tyvar.constrainedTy === null) {
-                    error(src, tyvar.origin.span, `type error: unconstrained type variable created here`)
+                    error(src, tyVarOriginSpan(tyvar.origin), `type error: unconstrained type variable created here`)
                     errors = true;
                 }
             }
@@ -1444,6 +1474,49 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     }
 
     const lub = computeLUBTypes();
+
+    function instantiateTyVars(ty: Ty): Ty {
+        if (!hasTyVid(ty)) return ty;
+
+        const flags = withoutTyVid(ty.flags);
+
+        switch (ty.type) {
+            case 'Alias': return { ...ty, flags, args: ty.args.map(instantiateTyVars) };
+            case 'Array': return { ...ty, flags, elemTy: instantiateTyVars(ty.elemTy) };
+            case 'TyVid': return infcx.tyVars[ty.id].constrainedTy!;
+            case 'FnDef': throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
+            case 'i32':
+            case 'string':
+            case 'void':
+            case 'TyParam':
+            case 'never': return ty;
+            case 'Pointer': return { ...ty, flags, pointee: instantiateTyVars(ty.pointee) };
+            case 'Record':
+                return { ...ty, flags, fields: ty.fields.map(([k, ty]) => [k, instantiateTyVars(ty)]) };
+            default: assertUnreachable(ty);
+        }
+    }
+
+    // Now that all type variables have been constrained, populate the various maps.
+    function writebackExpr(expr: Expr) {
+        let ty = infcx.exprTys.get(expr)!;
+        switch (expr.type) {
+            case 'FnCall':
+                const uninstantiatedSig = instantiatedFnSigs.get(expr)!;
+                instantiatedFnSigs.set(expr, {
+                    args: uninstantiatedSig.args.map(instantiateTyVars),
+                    parameters: uninstantiatedSig.parameters.map(instantiateTyVars),
+                    ret: instantiateTyVars(uninstantiatedSig.ret)
+                });
+                break;
+        }
+
+        if (hasTyVid(ty)) {
+            const instantiated = instantiateTyVars(ty);
+            infcx.exprTys.set(expr, instantiated);
+        }
+    }
+    for (const stmt of ast.stmts) forEachExprInStmt(stmt, writebackExpr);
 
     return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
 }
@@ -1676,9 +1749,11 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         if (res.type === 'Intrinsic') {
                             switch (res.value.name) {
                                 case 'bitcast': {
-                                    const assignee = addLocal(sig.ret, true);
-                                    const value = asValue(lowerExpr(expr.args[0]), sig.parameters[0]);
-                                    block.stmts.push({ type: 'Bitcast', assignee, from_ty: sig.parameters[0], to_ty: sig.ret, value });
+                                    const fromTy = instantiateTy(sig.parameters[0], args);
+                                    const toTy = instantiateTy(sig.ret, args);
+                                    const assignee = addLocal(toTy, true);
+                                    const value = asValue(lowerExpr(expr.args[0]), fromTy);
+                                    block.stmts.push({ type: 'Bitcast', assignee, from_ty: fromTy, to_ty: toTy, value });
                                     return { type: 'Local', value: assignee };
                                 }
                                 default: assertUnreachable(res.value.name);
@@ -1692,12 +1767,12 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
                     const res = addLocal(sig.ret, true);
 
-                    const args = expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!));
+                    const callArgs = expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!));
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
 
-                    block.terminator = { type: 'Call', args, assignee: res, decl: callee.value, sig, target: targetBlock };
+                    block.terminator = { type: 'Call', args: callArgs, assignee: res, decl: callee.value, sig, target: targetBlock };
                     block = blocks[targetBlock];
 
                     return { type: 'Local', value: res };
@@ -2003,7 +2078,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `%l.${stmt.assignee} = load ${llTy(finalTy)}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
                         }
-                        case 'AddrOfLocal': throw new Error('AddrOfLocal should be handled in renameAliases');
+                        case 'AddrOfLocal': break; // Handled in `renameAliases`
                         case 'Bitcast':
                             // compile bitcast<i64, i8*>(0) to
                             //

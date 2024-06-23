@@ -9,13 +9,13 @@ expr @ 3:29 4:0 => void
 expr @ 6:12 6:15 => fn add(...)
 expr @ 6:16 6:24 => fn identity(...)
 expr @ 6:25 6:27 => i32
+expr @ 6:16 6:28 => i32
 expr @ 6:30 6:38 => fn identity(...)
 expr @ 6:39 6:40 => i32
+expr @ 6:30 6:41 => i32
 expr @ 6:12 6:42 => i32
 expr @ 6:5 6:42 => never
 expr @ 5:16 8:1 => void
-expr @ 6:30 6:41 => i32
-expr @ 6:16 6:28 => i32
 
 define i32 @identity$LT$i32$GT$(i32 %lt.1) {
 prologue:

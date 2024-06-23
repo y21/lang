@@ -3,10 +3,10 @@
     return foo();
            ^^^^^  type error: unconstrained type variable created here
 
-            throw new Error(`attempted to mangle ${ty.type}`);
-            ^
+    switch (ty.type) {
+               ^
 
-Error: attempted to mangle TyVid
+TypeError: Cannot read properties of null (reading 'type')
 
 
 
