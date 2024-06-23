@@ -510,7 +510,7 @@ function parse(src: string): Program {
                 }
                 break;
             }
-            case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip(tokens[i].span) }; break;
+            case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip([tokens[i].span[0] + 1, tokens[i].span[1] - 1]) }; break;
             case TokenType.Ident: expr = { type: 'Literal', span: tokens[i].span, ident: snip(tokens[i].span) }; break;
             case TokenType.True: expr = { type: 'Bool', span: tokens[i].span, value: true }; break;
             case TokenType.False: expr = { type: 'Bool', span: tokens[i].span, value: false }; break;
@@ -775,7 +775,8 @@ enum PrimitiveTy {
     U16,
     U32,
     U64,
-    Bool
+    Bool,
+    Str
 }
 
 type IntrinsicName = 'bitcast';
@@ -839,6 +840,7 @@ function computeResolutions(ast: Program): Resolutions {
                     case 'u32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U32 }); break;
                     case 'u64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U64 }); break;
                     case 'bool': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Bool }); break;
+                    case 'str': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Str }); break;
                     default: registerRes(segment.ident, ty, tyRes, tyMap); break;
                 }
                 break;
@@ -1006,7 +1008,7 @@ type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'never' }
     | { type: 'bool' }
     | { type: 'int', value: IntTy }
-    | { type: 'string' }
+    | { type: 'str' }
     | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl }
     | { type: 'FnDef', decl: FnDecl }
@@ -1144,8 +1146,8 @@ function ppTy(ty: Ty): string {
             return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'never':
         case 'bool':
-        case 'string':
         case 'void':
+        case 'str':
             return ty.type;
         case 'Array':
             return `${ppTy(ty.elemTy)}[${ty.len}]`;
@@ -1208,7 +1210,7 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
         case 'TyVid':
         case 'int':
         case 'never':
-        case 'string':
+        case 'str':
         case 'void':
         case 'bool':
             // simple cases: nothing to instantiate
@@ -1345,6 +1347,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             case PrimitiveTy.U32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
                             case PrimitiveTy.U64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
                             case PrimitiveTy.Bool: return BOOL;
+                            case PrimitiveTy.Str: return { type: 'str', flags: EMPTY_FLAGS };
                             default: assertUnreachable(tyres.kind)
                         }
                         case 'TyAlias':
@@ -1454,7 +1457,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 // TODO: typescript's "as const" can create a literal type?
                 case 'Number': return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
                 case 'Bool': return BOOL;
-                case 'String': return { type: 'string', flags: EMPTY_FLAGS };
+                case 'String': return { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'str', flags: EMPTY_FLAGS } };
                 case 'Binary': {
                     const lhsTy = typeckExpr(expr.lhs);
                     const rhsTy = typeckExpr(expr.rhs);
@@ -1744,7 +1747,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             case 'TyVid': return infcx.tyVars[ty.id].constrainedTy!;
             case 'FnDef': throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
             case 'int':
-            case 'string':
+            case 'str':
             case 'void':
             case 'TyParam':
             case 'bool':
@@ -1783,6 +1786,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'bool', value: boolean }
     | { type: 'unit' }
+    | { type: 'str', value: string }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
@@ -1816,7 +1820,7 @@ function mangleTy(ty: Ty): string {
     switch (ty.type) {
         case 'never':
         case 'void':
-        case 'string':
+        case 'str':
         case 'bool':
             return ty.type;
         case 'int':
@@ -1944,6 +1948,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
+                case 'String': return { type: 'str', value: expr.value };
                 case 'Literal': {
                     const resolution = res.valueResolutions.get(expr)!;
                     switch (resolution.type) {
@@ -2149,17 +2154,23 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
 function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResults) {
     const _codegenCache = new Set<string>();
     let fnSection = '';
-
+    let constSection = '';
+    let constCount = 0;
+    let nextConstId = () => `@ct.${constCount++}`;
 
     function llTy(ty: Ty): string {
         switch (ty.type) {
             case 'bool': return 'i1';
             case 'int': return `i${ty.value.bits}`;
+            case 'str': throw new Error('cannot directly lower str type');
             case 'void': return 'void';
             case 'Pointer':
-                return `${llTy(ty.pointee)}*`;
+                if (ty.pointee.type === 'str') {
+                    return '{i8*, i64}';
+                } else {
+                    return `${llTy(ty.pointee)}*`;
+                }
             case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
-            case 'string':
             case 'FnDef':
             case 'Array':
                 todo(ty.type);
@@ -2187,6 +2198,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 }
             }
             case 'int': return `i${val.ity.bits}`;
+            case 'str': return '{i8*, i64}';
             case 'bool': return 'i1';
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef': throw new Error('FnDef values need to be treated specially');
@@ -2267,6 +2279,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     case 'Local': return `%l.${val.value}`;
                     case 'int':
                     case 'bool': return val.value.toString();
+                    case 'str':
+                        const ctId = nextConstId();
+                        constSection += `${ctId} = private constant [${val.value.length} x i8] c"${val.value}"`;
+                        return `{i8* ${ctId}, i64 ${val.value.length}}`;
                     case 'unit': return '{}';
                     case 'Unreachable': return 'poison';
                     case 'FnDef': throw new Error('FnDef values need to be treated specially');
@@ -2500,7 +2516,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 
     // TODO: validate entrypoint fn? like no generics etc?
     codegenFn(res.entrypoint, []);
-    return fnSection;
+    return constSection + '\n\n' + fnSection;
 }
 
 function timed<T>(what: string, f: () => T): T {
