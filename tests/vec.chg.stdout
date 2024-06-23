@@ -1,4 +1,4 @@
-expr @ 9:20 9:27 => fn bitcast(...)
+expr @ 9:20 9:27 => extern "intrinsic" fn bitcast(...)
 expr @ 9:28 9:29 => i32
 expr @ 9:20 9:30 => T*
 expr @ 9:37 9:38 => i32
@@ -19,6 +19,8 @@ expr @ 18:5 18:19 => i32
 expr @ 19:12 19:13 => i32
 expr @ 19:5 19:13 => never
 expr @ 16:16 21:1 => void
+
+
 
 define {i32*, i32, i32} @mkVec$LT$i32$GT$() {
 prologue:

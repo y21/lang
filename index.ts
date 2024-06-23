@@ -116,6 +116,7 @@ function ppSpan(src: string, span: Span): string {
 }
 
 enum TokenType {
+    Extern,
     Fn,
     Let,
     Return,
@@ -250,6 +251,7 @@ function tokenize(src: string): Token[] {
                     i--;
                     let ty;
                     switch (ident) {
+                        case 'extern': ty = TokenType.Extern; break;
                         case 'fn': ty = TokenType.Fn; break;
                         case 'let': ty = TokenType.Let; break;
                         case 'return': ty = TokenType.Return; break;
@@ -331,13 +333,21 @@ type Expr = { span: Span } & (
 
 type LetDecl = { type: 'LetDecl', name: string, init: Expr };
 
-type FnDecl = {
-    type: 'FnDecl',
+type AstFnSignature = {
     name: string,
     generics: Generics,
     parameters: FnParameter[],
     ret: AstTy,
+};
+type FnDecl = {
+    type: 'FnDecl',
+    sig: AstFnSignature,
     body: Expr
+};
+type ExternFnDecl = {
+    type: 'ExternFnDecl'
+    abi: 'C' | 'intrinsic',
+    sig: AstFnSignature
 };
 type FnParameter = { name: string, ty: AstTy };
 type Generics = string[];
@@ -345,7 +355,7 @@ type TyAliasDecl = { type: 'TyAlias', name: string, generics: Generics, construc
 type GenericArg<Ty> = { type: 'Type', ty: Ty };
 type PathSegment<Ty> = { ident: string; args: GenericArg<Ty>[] };
 type Path<Ty> = { segments: PathSegment<Ty>[] };
-type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl | TyAliasDecl);
+type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl | TyAliasDecl | ExternFnDecl);
 type Mutability = 'imm' | 'mut';
 type RecordFields<Ty> = ([string, Ty])[];
 type AstTy = { type: 'Path', value: Path<AstTy> }
@@ -357,6 +367,11 @@ type Program = { stmts: Stmt[] };
 type LeftToRight = 'ltr';
 type RightToLeft = 'rtl';
 type Associativity = LeftToRight | RightToLeft;
+
+function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl): Generics {
+    if (decl.type === 'TyAlias') return decl.generics;
+    else return decl.sig.generics;
+}
 
 const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
     // Somewhere between indexing/dot and multiplicative
@@ -415,7 +430,7 @@ function parse(src: string): Program {
 
     function expectIdent() {
         const ident = tokens[i++];
-        if (ident.ty !== TokenType.Ident) throw 'Expected ident, got ' + TokenType[ident.ty];
+        if (ident.ty !== TokenType.Ident) throw new Error('Expected ident, got ' + TokenType[ident.ty]);
         return snip(ident.span);
     }
 
@@ -666,36 +681,66 @@ function parse(src: string): Program {
     };
     let parseRootExpr = () => parseExpr(-1);
 
-    function parseStmt(): Stmt {
-        switch (tokens[i].ty) {
-            case TokenType.Fn: {
-                i++;
-                const name = expectIdent();
-                const generics = parseGenericsList();
-                const parameters: FnParameter[] = [];
+    /**
+     * Parses `fn foo(x: i32, y: i32): i32`, without an associated block.
+     */
+    function parseFnSignature(): AstFnSignature {
+        const name = expectIdent();
+        const generics = parseGenericsList();
+        const parameters: FnParameter[] = [];
 
-                eatToken(TokenType.LParen);
-                while (!eatToken(TokenType.RParen, false)) {
-                    eatToken(TokenType.Comma, false);
-                    const name = expectIdent();
-                    eatToken(TokenType.Colon);
-                    const ty = parseTy();
-                    parameters.push({ name, ty });
+        eatToken(TokenType.LParen);
+        while (!eatToken(TokenType.RParen, false)) {
+            eatToken(TokenType.Comma, false);
+            const name = expectIdent();
+            eatToken(TokenType.Colon);
+            const ty = parseTy();
+            parameters.push({ name, ty });
+        }
+
+        eatToken(TokenType.Colon);
+
+        const ret = parseTy();
+
+        return {
+            name,
+            generics,
+            parameters,
+            ret,
+        };
+    }
+
+    function parseStmt(): Stmt {
+        const startSpan = tokens[i].span;
+        switch (tokens[i].ty) {
+            case TokenType.Extern: {
+                i++;
+                const abi = parseRootExpr();
+                if (abi.type !== 'String' || (abi.value !== 'C' && abi.value !== 'intrinsic')) {
+                    throw new Error('extern abi must be a string and "C" or "intrinsic"');
                 }
 
-                eatToken(TokenType.Colon);
+                eatToken(TokenType.Fn, true);
+                const sig = parseFnSignature();
+                eatToken(TokenType.Semi, true);
 
-                const ret = parseTy();
+                return {
+                    type: 'ExternFnDecl',
+                    sig,
+                    abi: abi.value,
+                    span: joinSpan(startSpan, tokens[i - 1].span)
+                };
+            }
+            case TokenType.Fn: {
+                i++;
+                const sig = parseFnSignature();
                 const body = parseRootExpr();
 
                 return {
                     type: 'FnDecl',
-                    span: body.span, // TODO: wrong span
-                    name,
-                    generics,
-                    parameters,
-                    ret,
-                    body
+                    body,
+                    span: joinSpan(startSpan, tokens[i - 1].span),
+                    sig
                 };
             }
             case TokenType.Let: {
@@ -780,16 +825,18 @@ enum PrimitiveTy {
 }
 
 type IntrinsicName = 'bitcast';
-type Intrinsic = ({ name: IntrinsicName }) & FnDecl;
+type Intrinsic = ({ abi: 'intrinsic' }) & ExternFnDecl;
 
 function mkIntrinsic(name: IntrinsicName, generics: Generics, parameters: FnParameter[], ret: AstTy): Intrinsic {
     return {
-        name: name,
-        body: null as any, // The body doesn't really matter -- no pass should look into other fn bodies and codegen/mir special cases intrinsics
-        generics,
-        parameters,
-        ret,
-        type: 'FnDecl'
+        type: 'ExternFnDecl',
+        abi: 'intrinsic',
+        sig: {
+            name: name,
+            generics,
+            parameters,
+            ret,
+        },
     }
 }
 
@@ -798,10 +845,10 @@ function identPathTy(ident: string): AstTy {
 }
 
 const INTRINSICS: Intrinsic[] = [mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))];
-type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl };
+type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
 type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
-type ValueResolution = FnDecl | LetDecl | ({ type: 'FnParam', param: FnParameter }) | { type: 'Intrinsic', value: Intrinsic };
+type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter });
 type ValueResolutions = Map<Expr, ValueResolution>;
 type Resolutions = { tyResolutions: TypeResolutions, valueResolutions: ValueResolutions, entrypoint: FnDecl };
 
@@ -812,6 +859,14 @@ function computeResolutions(ast: Program): Resolutions {
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
     const identMap: Map<Expr, ValueResolution> = new Map();
+
+    const withAllScopes = (f: () => void) => {
+        tyRes.withScope(() => {
+            valRes.withScope(() => {
+                f();
+            });
+        })
+    };
 
     const registerRes = <K, T>(nskey: string, mapkey: K, ns: ResNamespace<T>, map: Map<K, T>) => {
         const res = ns.find(nskey);
@@ -859,6 +914,13 @@ function computeResolutions(ast: Program): Resolutions {
     function resolveStmt(stmt: Stmt) {
         switch (stmt.type) {
             case 'FnDecl': resolveFnDecl(stmt); break;
+            case 'ExternFnDecl': {
+                valRes.add(stmt.sig.name, stmt);
+                withAllScopes(() => {
+                    resolveFnSig(stmt.sig, stmt);
+                });
+                break;
+            }
             case 'Expr': resolveExpr(stmt.value); break;
             case 'LetDecl': {
                 valRes.add(stmt.name, stmt);
@@ -948,44 +1010,37 @@ function computeResolutions(ast: Program): Resolutions {
         }
     }
 
-    function resolveFnDeclHeader(decl: FnDecl) {
-        for (let i = 0; i < decl.generics.length; i++) {
-            tyRes.add(decl.generics[i], { type: 'TyParam', id: i, parentItem: decl });
+    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl) {
+        for (let i = 0; i < sig.generics.length; i++) {
+            tyRes.add(sig.generics[i], { type: 'TyParam', id: i, parentItem: item });
         }
 
-        for (const param of decl.parameters) {
+        for (const param of sig.parameters) {
             valRes.add(param.name, { type: 'FnParam', param });
             resolveTy(param.ty);
         }
-        resolveTy(decl.ret);
+        resolveTy(sig.ret);
     }
 
     function resolveFnDecl(decl: FnDecl) {
-        if (INTRINSICS.some(ins => ins.name === decl.name)) {
-            throw new Error(`function cannot have name '${decl.name}' because it is the name of an intrinsic`);
+        if (INTRINSICS.some(ins => ins.sig.name === decl.sig.name)) {
+            throw new Error(`function cannot have name '${decl.sig.name}' because it is the name of an intrinsic`);
         }
-        valRes.add(decl.name, decl);
-        valRes.withScope(() => {
-            tyRes.withScope(() => {
-                resolveFnDeclHeader(decl);
-                resolveExpr(decl.body);
-            });
+        valRes.add(decl.sig.name, decl);
+        withAllScopes(() => {
+            resolveFnSig(decl.sig, decl);
+            resolveExpr(decl.body);
         });
     }
 
     valRes.withScope(() => {
         for (const intrinsic of INTRINSICS) {
-            valRes.add(intrinsic.name, { type: 'Intrinsic', value: intrinsic });
-            valRes.withScope(() => {
-                tyRes.withScope(() => {
-                    resolveFnDeclHeader(intrinsic);
-                });
-            });
+            resolveStmt({ type: 'ExternFnDecl', abi: 'intrinsic', span: [0, 0], sig: intrinsic.sig });
         }
 
         tyRes.withScope(() => {
             for (const stmt of ast.stmts) {
-                if (stmt.type === 'FnDecl' && stmt.name === 'main') {
+                if (stmt.type === 'FnDecl' && stmt.sig.name === 'main') {
                     entrypoint = stmt;
                 }
                 resolveStmt(stmt);
@@ -1010,8 +1065,9 @@ type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'int', value: IntTy }
     | { type: 'str' }
     | { type: 'Array', elemTy: Ty, len: number }
-    | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl }
+    | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl }
     | { type: 'FnDef', decl: FnDecl }
+    | { type: 'ExternFnDef', decl: ExternFnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
     | { type: 'Alias', decl: TyAliasDecl, alias: Ty, args: Ty[] });
@@ -1153,9 +1209,12 @@ function ppTy(ty: Ty): string {
             return `${ppTy(ty.elemTy)}[${ty.len}]`;
         case 'Pointer':
             return `${ppTy(ty.pointee)}*`
-        case 'TyParam': return ty.parentItem.generics[ty.id];
+        case 'TyParam': return genericsOfDecl(ty.parentItem)[ty.id];
         case 'TyVid': return `?${ty.id}t`;
-        case 'FnDef': return `fn ${ty.decl.name}(...)`;
+        case 'FnDef':
+            return `fn ${ty.decl.sig.name}(...)`;
+        case 'ExternFnDef':
+            return `extern "${ty.decl.abi}" fn ${ty.decl.sig.name}(...)`;
         case 'Record': {
             let out = '{';
             for (let i = 0; i < ty.fields.length; i++) {
@@ -1222,7 +1281,9 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
             const elemTy = instantiateTy(ty, args);
             return { ...ty, flags: elemTy.flags, elemTy };
         }
-        case 'FnDef': throw new Error('attempted to instantiate FnDef');
+        case 'FnDef':
+        case 'ExternFnDef':
+            throw new Error('attempted to instantiate FnDef');
         case 'Pointer': {
             const pointee = instantiateTy(ty.pointee, args);
             return { ...ty, flags: pointee.flags, pointee };
@@ -1391,7 +1452,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     }
 
     function typeckFn(decl: FnDecl) {
-        const ret = lowerTy(decl.ret);
+        const ret = lowerTy(decl.sig.ret);
         const locals = new Map();
         infcx.withFn(ret, locals, () => { typeckExpr(decl.body); });
     }
@@ -1406,6 +1467,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 break;
             }
             case 'TyAlias': break;
+            case 'ExternFnDecl': lowerTy(stmt.sig.ret); break;
             default: assertUnreachable(stmt);
         }
     }
@@ -1419,9 +1481,9 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     switch (litres.type) {
                         // TODO: is EMPTY_FLAGS correct here..?
                         case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
+                        case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'LetDecl': return infcx.localTy(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
-                        case 'Intrinsic': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres.value };
                         default: assertUnreachable(litres);
                     }
                 }
@@ -1515,7 +1577,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'FnCall': {
                     const sig = (() => {
                         const callee = typeckExpr(expr.callee);
-                        if (callee.type !== 'FnDef') {
+                        if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef') {
                             throw new Error('callee must be a FnDef');
                         }
 
@@ -1526,17 +1588,17 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             args: []
                         };
 
-                        for (let i = 0; i < callee.decl.generics.length; i++) {
+                        for (let i = 0; i < callee.decl.sig.generics.length; i++) {
                             const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
                             sig.args.push(tv);
                         }
 
                         // with `genericArgs` created we can fix up the signature
-                        for (const param of callee.decl.parameters) {
+                        for (const param of callee.decl.sig.parameters) {
                             const ty = lowerTy(param.ty);
                             sig.parameters.push(instantiateTy(ty, sig.args));
                         }
-                        sig.ret = instantiateTy(lowerTy(callee.decl.ret), sig.args);
+                        sig.ret = instantiateTy(lowerTy(callee.decl.sig.ret), sig.args);
 
                         return sig;
                     })();
@@ -1745,7 +1807,9 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             case 'Alias': return { ...ty, flags, args: ty.args.map(instantiateTyVars) };
             case 'Array': return { ...ty, flags, elemTy: instantiateTyVars(ty.elemTy) };
             case 'TyVid': return infcx.tyVars[ty.id].constrainedTy!;
-            case 'FnDef': throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
+            case 'FnDef':
+            case 'ExternFnDef':
+                throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
             case 'int':
             case 'str':
             case 'void':
@@ -1830,6 +1894,7 @@ function mangleTy(ty: Ty): string {
         case 'TyParam':
         case 'TyVid':
         case 'FnDef':
+        case 'ExternFnDef':
             throw new Error(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
@@ -1849,9 +1914,9 @@ function mangleTy(ty: Ty): string {
     }
 }
 function mangleInstFn(decl: FnDecl, args: Ty[]): string {
-    let mangled = decl.name;
+    let mangled = decl.sig.name;
 
-    assert(decl.generics.length === args.length, `mismatched generic args when mangling ${decl.name}`);
+    assert(decl.sig.generics.length === args.length, `mismatched generic args when mangling ${decl.sig.name}`);
     if (args.length > 0) {
         mangled += '$LT$';
 
@@ -1878,7 +1943,7 @@ function mangleInstFn(decl: FnDecl, args: Ty[]): string {
 const _mirBodyCache = new Map<string, MirBody>();
 function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], res: Resolutions, typeck: TypeckResults): MirBody {
     function lowerMir(): MirBody {
-        if (decl.body.type !== 'Block') throw `${decl.name} did not have a block as its body?`;
+        if (decl.body.type !== 'Block') throw `${decl.sig.name} did not have a block as its body?`;
 
         const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
         const locals: MirLocal[] = [];
@@ -1892,7 +1957,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             return blocks.length - 1;
         };
         // _0 = return place
-        assert(addLocal(typeck.loweredTys.get(decl.ret)!, false) === 0);
+        assert(addLocal(typeck.loweredTys.get(decl.sig.ret)!, false) === 0);
         const returnPlace = locals[0] as MirLocal<false>;
         const returnId = 0 as MirLocalId<false>;
         const blocks: MirBlock[] = [
@@ -1904,7 +1969,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         let block = blocks[0];
 
         const parameters = [];
-        for (const param of decl.parameters) {
+        for (const param of decl.sig.parameters) {
             const local = addLocal(typeck.loweredTys.get(param.ty)!, false);
             parameters.push(local);
             astLocalToMirLocal.set(param, local);
@@ -1931,6 +1996,10 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         function lowerStmt(stmt: Stmt) {
             switch (stmt.type) {
                 case 'FnDecl': break; // Nested bodies are only lowered when explicitly requested
+                case 'ExternFnDecl':
+                    // Extern fns don't have a body, nothing needs to be lowered
+                    // TODO: we might want to at the very least validate intrinsic signatures
+                    break;
                 case 'LetDecl': {
                     const ty = typeck.exprTys.get(stmt.init)!;
                     const local = addLocal(ty, false);
@@ -1963,7 +2032,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                             const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
                             return { type: 'Place', base: id, projections: [] };
                         }
-                        case 'Intrinsic': throw new Error('intrinsics must be called immediately'); // Handled in 'Call'
+                        case 'ExternFnDecl': throw new Error('extern functions must be called immediately'); // Handled in 'Call'
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -2033,8 +2102,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     // calls to intrinsics are special cased
                     if (expr.callee.type === 'Literal') {
                         const res = resolutions.valueResolutions.get(expr.callee)!;
-                        if (res.type === 'Intrinsic') {
-                            switch (res.value.name) {
+                        if (res.type === 'ExternFnDecl' && res.abi === 'intrinsic') {
+                            switch (res.sig.name) {
                                 case 'bitcast': {
                                     const fromTy = instantiateTy(sig.parameters[0], args);
                                     const toTy = instantiateTy(sig.ret, args);
@@ -2043,7 +2112,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                                     block.stmts.push({ type: 'Bitcast', assignee, from_ty: fromTy, to_ty: toTy, value });
                                     return { type: 'Local', value: assignee };
                                 }
-                                default: assertUnreachable(res.value.name);
+                                default: throw new Error(`unknown intrinsic: ${res.sig.name}`);
                             }
                         }
                     }
@@ -2170,6 +2239,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 } else {
                     return `${llTy(ty.pointee)}*`;
                 }
+            case 'ExternFnDef': throw new Error('extern fn in llir lowering');
             case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
             case 'FnDef':
             case 'Array':
