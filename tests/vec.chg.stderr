@@ -1,4 +1,0 @@
-
-
-    return .{ ptr: 0, len: 0, cap: 0 };
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  type error: i32 is not a subtype of T* (reason: 'Return')

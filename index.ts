@@ -943,14 +943,6 @@ class Infcx {
         this.sub('Return', at, ty, sup);
     }
 
-    // deferExprTy(ty: { type: 'TyVid', id: number }, expr: Expr) {
-    //     this.tyVars[ty.id].deferredExprs.push(expr);
-    // }
-
-    // deferInstSig(ty: { type: 'TyVid', id: number }, sig: InstantiatedFnSig) {
-    //     this.tyVars[ty.id].dereferredInsts.push(sig);
-    // }
-
     tryResolve(ty: Ty): Ty {
         if (ty.type === 'TyVid' && this.tyVars[ty.id].constrainedTy) {
             return this.tyVars[ty.id].constrainedTy!;

@@ -6,9 +6,15 @@ type Vec<T> constructible(mkVec) = {
 };
 
 fn mkVec<T>(): Vec<T> {
-    return .{ ptr: 0, len: 0, cap: 0 };
+    return .{ ptr: bitcast(0), len: 0, cap: 0 };
+}
+
+fn push<T>(vec: Vec<T>*, value: T): i32 {
+    return 0;
 }
 
 fn main(): i32 {
+    let vec = mkVec();
+    push(&vec, 42);
     return 0;
 }

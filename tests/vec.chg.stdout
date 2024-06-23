@@ -1,19 +1,81 @@
-expr @ 9:20 9:21 => i32
+expr @ 9:20 9:27 => fn bitcast(...)
 expr @ 9:28 9:29 => i32
-expr @ 9:36 9:37 => i32
-expr @ 9:12 9:39 => {ptr: i32,len: i32,cap: i32}
-expr @ 9:5 9:39 => never
+expr @ 9:20 9:30 => T*
+expr @ 9:37 9:38 => i32
+expr @ 9:45 9:46 => i32
+expr @ 9:12 9:48 => {ptr: T*,len: i32,cap: i32}
+expr @ 9:5 9:48 => never
 expr @ 8:23 11:0 => void
 expr @ 13:12 13:13 => i32
 expr @ 13:5 13:13 => never
-expr @ 12:16 15:1 => void
+expr @ 12:41 15:0 => void
+expr @ 17:15 17:20 => fn mkVec(...)
+expr @ 17:15 17:22 => Vec<i32>
+expr @ 18:5 18:9 => fn push(...)
+expr @ 18:11 18:14 => Vec<i32>
+expr @ 18:10 18:14 => Vec<i32>*
+expr @ 18:16 18:18 => i32
+expr @ 18:5 18:19 => i32
+expr @ 19:12 19:13 => i32
+expr @ 19:5 19:13 => never
+expr @ 16:16 21:1 => void
+
+define {i32*, i32, i32} @mkVec$LT$i32$GT$() {
+prologue:
+%l.0 = alloca {i32*, i32, i32}
+br label %bb.0
+
+bb.0:
+%t.0 = alloca i32
+store i32 0, i32* %t.0
+%t.1 = bitcast i32* %t.0 to i32**
+%l.1 = load i32*, i32** %t.1
+%t.2 = alloca {i32*, i32, i32}
+%p.3 = getelementptr {i32*, i32, i32}, {i32*, i32, i32}* %t.2, i32 0, i32 0
+store i32* %l.1, i32** %p.3
+%p.4 = getelementptr {i32*, i32, i32}, {i32*, i32, i32}* %t.2, i32 0, i32 1
+store i32 0, i32* %p.4
+%p.5 = getelementptr {i32*, i32, i32}, {i32*, i32, i32}* %t.2, i32 0, i32 2
+store i32 0, i32* %p.5
+%t.6 = load {i32*, i32, i32}, {i32*, i32, i32}* %t.2
+store {i32*, i32, i32} %t.6, {i32*, i32, i32}* %l.0
+%ret.7 = load {i32*, i32, i32}, {i32*, i32, i32}* %l.0
+ret {i32*, i32, i32} %ret.7
+
+}
+
+define i32 @push$LT$i32$GT$({i32*, i32, i32}* %lt.1, i32 %lt.2) {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca {i32*, i32, i32}*
+%l.2 = alloca i32
+store {i32*, i32, i32}* %lt.1, {i32*, i32, i32}** %l.1
+store i32 %lt.2, i32* %l.2
+br label %bb.0
+
+bb.0:
+store i32 0, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
 
 define i32 @main() {
 prologue:
 %l.0 = alloca i32
+%l.1 = alloca {i32*, i32, i32}
 br label %bb.0
 
 bb.0:
+%l.2 = call {i32*, i32, i32} @mkVec$LT$i32$GT$()
+br label %bb.1
+
+bb.1:
+store {i32*, i32, i32} %l.2, {i32*, i32, i32}* %l.1
+%l.3 = call i32 @push$LT$i32$GT$({i32*, i32, i32}* %l.1, i32 42)
+br label %bb.2
+
+bb.2:
 store i32 0, i32* %l.0
 %ret.0 = load i32, i32* %l.0
 ret i32 %ret.0
