@@ -142,6 +142,7 @@ enum TokenType {
     Semi,
     Comma,
     Mut,
+    Underscore,
     Number,
     String,
     Plus,
@@ -184,6 +185,7 @@ function tokenize(src: string): Token[] {
             case '\n':
                 break;
             case '(': tokens.push({ span: [start, i + 1], ty: TokenType.LParen }); break;
+            case '_': tokens.push({ span: [start, i + 1], ty: TokenType.Underscore }); break;
             case ')': tokens.push({ span: [start, i + 1], ty: TokenType.RParen }); break;
             case '[': tokens.push({ span: [start, i + 1], ty: TokenType.LSquare }); break;
             case ']': tokens.push({ span: [start, i + 1], ty: TokenType.RSquare }); break;
@@ -466,7 +468,6 @@ function parse(src: string): Program {
 
                 ty = { type: 'Path', value: { segments: [segment] } };
                 break;
-            default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
             case TokenType.LBrace:
                 i++;
                 const fields: RecordFields<AstTy> = [];
@@ -479,6 +480,8 @@ function parse(src: string): Program {
                 }
                 ty = { type: 'Record', fields };
                 break;
+            case TokenType.Underscore: i++; return { type: 'Infer' };
+            default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
         }
 
         while (i < tokens.length) {
@@ -1441,7 +1444,6 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 flags |= lowered.flags;
                                 args.push(lowered);
                             }
-
                             return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
                         default: assertUnreachable(tyres)
                     }
@@ -1612,7 +1614,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         };
 
                         if (expr.callee.type === 'Literal' && expr.callee.args !== null) {
-                            sig.args = expr.callee.args.map(ty => lowerTy(ty));
+                            sig.args = expr.callee.args.map(ty => {
+                                return ty.type === 'Infer'
+                                    ? infcx.mkTyVar({ type: 'GenericArg', span: expr.span })
+                                    : lowerTy(ty)
+                            });
                         } else {
                             for (let i = 0; i < callee.decl.sig.generics.length; i++) {
                                 const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
