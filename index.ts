@@ -1706,6 +1706,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             || (sub.type === 'bool' && sup.type === 'bool')
                             // same type parameters
                             || (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id)
+                            || (sub.type === 'str' && sup.type === 'str')
                         ) {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {
@@ -1854,6 +1855,7 @@ type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
+    | { type: 'ExternFnDef', value: ExternFnDecl }
     | { type: 'Record', value: RecordFields<MirValue> };
 /**
  * `temporary` indicates whether this local is used for a subexpression.
@@ -1870,7 +1872,7 @@ type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> }
     | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
 type MirTerminator = { type: 'Return' }
-    | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId }
+    | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
     | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
     | { type: 'Jump', target: MirBlockId };
 type MirBlock = {
@@ -2032,7 +2034,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                             const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
                             return { type: 'Place', base: id, projections: [] };
                         }
-                        case 'ExternFnDecl': throw new Error('extern functions must be called immediately'); // Handled in 'Call'
+                        case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -2118,8 +2120,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
 
                     const callee = lowerExpr(expr.callee);
-                    if (callee.type !== 'FnDef') {
-                        throw new Error('callee must be a FnDef');
+                    if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef') {
+                        throw new Error('callee must be a FnDef or ExternFnDef');
                     }
                     const res = addLocal(sig.ret, true);
 
@@ -2222,6 +2224,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
 
 function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResults) {
     const _codegenCache = new Set<string>();
+    const _externDeclarations = new Set<string>();
+    let declareSection = '';
     let fnSection = '';
     let constSection = '';
     let constCount = 0;
@@ -2271,7 +2275,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'str': return '{i8*, i64}';
             case 'bool': return 'i1';
             case 'Unreachable': todo('unreachable ty');
-            case 'FnDef': throw new Error('FnDef values need to be treated specially');
+            case 'FnDef':
+            case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
             case 'unit': return '{}';
         }
@@ -2351,11 +2356,13 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     case 'bool': return val.value.toString();
                     case 'str':
                         const ctId = nextConstId();
-                        constSection += `${ctId} = private constant [${val.value.length} x i8] c"${val.value}"`;
-                        return `{i8* ${ctId}, i64 ${val.value.length}}`;
+                        const ctTy = `[${val.value.length} x i8]`;
+                        constSection += `${ctId} = private constant ${ctTy} c"${val.value}"`;
+                        return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${val.value.length}}`;
                     case 'unit': return '{}';
                     case 'Unreachable': return 'poison';
-                    case 'FnDef': throw new Error('FnDef values need to be treated specially');
+                    case 'FnDef':
+                    case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
                     case 'Record': {
                         // compile {x: 1i32, y: 2i64} to:
                         //
@@ -2551,11 +2558,32 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `ret ${llTy(ret)} %ret.${temp}\n`;
                             break;
                         case 'Call':
-                            const calleeMangled = mangleInstFn(terminator.decl, terminator.sig.args);
-                            codegenFn(terminator.decl, terminator.sig.args);
-                            // NB: don't write to `output` here before the `argList` mapping, since that may compile values
+                            let mangledName: string;
+                            switch (terminator.decl.type) {
+                                case 'FnDecl': {
+                                    const calleeMangled = mangleInstFn(terminator.decl, terminator.sig.args);
+                                    codegenFn(terminator.decl, terminator.sig.args);
+                                    // NB: don't write to `output` here before the `argList` mapping, since that may compile values
+                                    mangledName = calleeMangled;
+                                    break;
+                                }
+                                case 'ExternFnDecl': {
+                                    if (!_externDeclarations.has(terminator.decl.sig.name)) {
+                                        const ret = typeck.loweredTys.get(terminator.decl.sig.ret)!;
+                                        const parameterList = terminator.decl.sig.parameters.map(({ ty }) => {
+                                            return llTy(typeck.loweredTys.get(ty)!);
+                                        }).join(', ');
+                                        declareSection += `declare ${llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
+                                        _externDeclarations.add(terminator.decl.sig.name);
+                                    }
+                                    mangledName = terminator.decl.sig.name;
+                                    break;
+                                }
+                                default: assertUnreachable(terminator.decl);
+                            }
+
                             const argList = terminator.args.map(arg => `${llValTy(mir, arg)} ${compileValueToLocal(arg)}`).join(', ');
-                            output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${calleeMangled}(${argList})\n`;
+                            output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${mangledName}(${argList})\n`;
                             output += `br label %bb.${terminator.target}\n`;
                             break;
                         case 'Conditional': {
@@ -2586,7 +2614,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 
     // TODO: validate entrypoint fn? like no generics etc?
     codegenFn(res.entrypoint, []);
-    return constSection + '\n\n' + fnSection;
+    return declareSection + '\n' + constSection + '\n' + fnSection;
 }
 
 function timed<T>(what: string, f: () => T): T {
