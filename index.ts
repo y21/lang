@@ -120,6 +120,8 @@ enum TokenType {
     Let,
     Return,
     Type,
+    True,
+    False,
     Constructible,
     Ident,
     LParen,
@@ -217,11 +219,13 @@ function tokenize(src: string): Token[] {
                         case 'mut': ty = TokenType.Mut; break;
                         case 'type': ty = TokenType.Type; break;
                         case 'constructible': ty = TokenType.Constructible; break;
+                        case 'true': ty = TokenType.True; break;
+                        case 'false': ty = TokenType.False; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });
                 } else if (isDigit(src[i])) {
-                    while (isDigit(src[i])) i++;
+                    while (isDigit(src[i]) || src[i] === 'i' || src[i] === 'u') i++;
                     let span: Span = [start, i];
                     i--;
                     tokens.push({ span, ty: TokenType.Number });
@@ -248,7 +252,8 @@ type Expr = { span: Span } & (
     | { type: "FnCall"; args: Expr[]; callee: Expr }
     | { type: "Index"; target: Expr; index: Expr; }
     | { type: "ArrayLiteral"; elements: Expr[] }
-    | { type: "Number"; value: number }
+    | { type: "Number"; value: number, suffix: IntTy }
+    | { type: "Bool", value: boolean }
     | { type: "String"; value: string }
     | { type: "Assignment"; target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string }
@@ -401,9 +406,36 @@ function parse(src: string): Program {
     function parseBottomExpr(): Expr {
         let expr: Expr;
         switch (tokens[i].ty) {
-            case TokenType.Number: expr = { type: 'Number', span: tokens[i].span, value: +snip(tokens[i].span) }; break;
+            case TokenType.Number: {
+                const suffixes: [string, Ty][] = [
+                    ['u8', U8],
+                    ['u16', U16],
+                    ['u32', U32],
+                    ['u64', U64],
+                    ['i8', I8],
+                    ['i16', I16],
+                    ['i32', I32],
+                    ['i64', I64],
+                ];
+                let fullSnip = snip(tokens[i].span);
+                let foundSuffix = suffixes.find((suffix) => fullSnip.endsWith(suffix[0]));
+                if (foundSuffix) {
+                    const unsuffixSpan: Span = [tokens[i].span[0], tokens[i].span[1] - foundSuffix.length - 1]
+                    const unsuffixSnip = +snip(unsuffixSpan);
+                    if (!Number.isInteger(unsuffixSnip)) {
+                        throw new Error(`${unsuffixSnip} is not an integer`);
+                    }
+
+                    expr = { type: 'Number', span: unsuffixSpan, suffix: (foundSuffix[1] as { type: 'int', value: IntTy }).value, value: unsuffixSnip };
+                } else {
+                    expr = { type: 'Number', span: tokens[i].span, suffix: { bits: 32, signed: true }, value: +snip(tokens[i].span) };
+                }
+                break;
+            }
             case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip(tokens[i].span) }; break;
             case TokenType.Ident: expr = { type: 'Literal', span: tokens[i].span, ident: snip(tokens[i].span) }; break;
+            case TokenType.True: expr = { type: 'Bool', span: tokens[i].span, value: true }; break;
+            case TokenType.False: expr = { type: 'Bool', span: tokens[i].span, value: false }; break;
             case TokenType.Dot: {
                 const span = tokens[i].span;
                 i++;
@@ -626,7 +658,15 @@ class ResNamespace<T> {
 enum PrimitiveTy {
     Void,
     Never,
+    I8,
+    I16,
     I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool
 }
 
 type IntrinsicName = 'bitcast';
@@ -681,7 +721,15 @@ function computeResolutions(ast: Program): Resolutions {
                 switch (segment.ident) {
                     case 'void': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Void }); break;
                     case 'never': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Never }); break;
+                    case 'i8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I8 }); break;
+                    case 'i16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I16 }); break;
                     case 'i32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I32 }); break;
+                    case 'i64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I64 }); break;
+                    case 'u8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U8 }); break;
+                    case 'u16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U16 }); break;
+                    case 'u32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U32 }); break;
+                    case 'u64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U64 }); break;
+                    case 'bool': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Bool }); break;
                     default: registerRes(segment.ident, ty, tyRes, tyMap); break;
                 }
                 break;
@@ -754,6 +802,7 @@ function computeResolutions(ast: Program): Resolutions {
             }
             case 'Number':
             case 'String':
+            case 'Bool':
                 break;
             case 'Binary':
                 resolveExpr(expr.lhs);
@@ -827,10 +876,13 @@ function computeResolutions(ast: Program): Resolutions {
 }
 
 type RecordType = { type: 'Record', fields: RecordFields<Ty> };
+type Bits = 8 | 16 | 32 | 64;
+type IntTy = { signed: boolean, bits: Bits };
 type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'void' }
     | { type: 'never' }
-    | { type: 'i32' }
+    | { type: 'bool' }
+    | { type: 'int', value: IntTy }
     | { type: 'string' }
     | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl }
@@ -859,6 +911,15 @@ function removeTyVid(ty: Ty): Ty {
     ty.flags &= ~TYVID_MASK;
     return ty;
 }
+const I8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 8, signed: true } };
+const I16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 16, signed: true } };
+const I32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 32, signed: true } };
+const I64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 64, signed: true } };
+const U8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 8, signed: false } };
+const U16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 16, signed: false } };
+const U32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 32, signed: false } };
+const U64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 64, signed: false } };
+const BOOL: Ty = { type: 'bool', flags: EMPTY_FLAGS };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument';
@@ -956,8 +1017,10 @@ class Infcx {
  */
 function ppTy(ty: Ty): string {
     switch (ty.type) {
-        case 'i32':
+        case 'int':
+            return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'never':
+        case 'bool':
         case 'string':
         case 'void':
             return ty.type;
@@ -1020,10 +1083,11 @@ function instantiateTy(ty: Ty, args: Ty[]): Ty {
             };
         }
         case 'TyVid':
-        case 'i32':
+        case 'int':
         case 'never':
         case 'string':
         case 'void':
+        case 'bool':
             // simple cases: nothing to instantiate
             return ty;
         case 'TyParam':
@@ -1082,6 +1146,7 @@ function forEachExpr(expr: Expr, f: (e: Expr) => void) {
     switch (expr.type) {
         case 'Literal':
         case 'Number':
+        case 'Bool':
         case 'String': break;
         case 'Block': for (const stmt of expr.stmts) forEachExprInStmt(stmt, f); break;
         case 'Return': forEachExpr(expr.value, f); break;
@@ -1134,7 +1199,15 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         case 'Primitive': switch (tyres.kind) {
                             case PrimitiveTy.Void: return { type: 'void', flags: EMPTY_FLAGS };
                             case PrimitiveTy.Never: return { type: 'never', flags: EMPTY_FLAGS };
-                            case PrimitiveTy.I32: return { type: 'i32', flags: EMPTY_FLAGS };
+                            case PrimitiveTy.I8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
+                            case PrimitiveTy.I16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
+                            case PrimitiveTy.I32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
+                            case PrimitiveTy.I64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
+                            case PrimitiveTy.U8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
+                            case PrimitiveTy.U16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
+                            case PrimitiveTy.U32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
+                            case PrimitiveTy.U64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
+                            case PrimitiveTy.Bool: return BOOL;
                             default: assertUnreachable(tyres.kind)
                         }
                         case 'TyAlias':
@@ -1232,7 +1305,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     return { type: 'void', flags: EMPTY_FLAGS };
                 }
                 case 'Index': {
-                    infcx.sub('Index', expr.span, typeckExpr(expr.index), { type: 'i32', flags: EMPTY_FLAGS });
+                    infcx.sub('Index', expr.span, typeckExpr(expr.index), U64);
                     const target = typeckExpr(expr.target);
                     if (target.type === 'Array') {
                         return target.elemTy;
@@ -1242,12 +1315,15 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
                 }
                 // TODO: typescript's "as const" can create a literal type?
-                case 'Number': return { type: 'i32', flags: EMPTY_FLAGS };
+                case 'Number': return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
+                case 'Bool': return BOOL;
                 case 'String': return { type: 'string', flags: EMPTY_FLAGS };
                 case 'Binary': {
-                    infcx.sub('UseInArithmeticOperation', expr.lhs.span, typeckExpr(expr.lhs), { type: 'i32', flags: EMPTY_FLAGS });
-                    infcx.sub('UseInArithmeticOperation', expr.rhs.span, typeckExpr(expr.rhs), { type: 'i32', flags: EMPTY_FLAGS });
-                    return { type: 'i32', flags: EMPTY_FLAGS };
+                    const lhsTy = typeckExpr(expr.lhs);
+                    const rhsTy = typeckExpr(expr.rhs);
+                    infcx.sub('UseInArithmeticOperation', expr.lhs.span, lhsTy, rhsTy);
+                    infcx.sub('UseInArithmeticOperation', expr.rhs.span, rhsTy, lhsTy);
+                    return lhsTy;
                 }
                 case 'AddrOf': {
                     const pointee = typeckExpr(expr.pointee);
@@ -1373,12 +1449,18 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
                 switch (constraint.type) {
                     case 'SubtypeOf':
-                        if (sub.type === 'i32' && sup.type === 'i32') {
+                        // Trivial cases which are always true without requiring nested constraints:
+                        if (
+                            // int == int of same size & signedness
+                            (sub.type === 'int' && sup.type === 'int' && sub.value.bits === sup.value.bits && sub.value.signed === sup.value.signed)
+                            // bool == bool
+                            || (sub.type === 'bool' && sup.type === 'bool')
+                            // same type parameters
+                            || (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id)
+                        ) {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {
                             subFields(sub, sup);
-                        } else if (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id) {
-                            // OK
                         } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
                             infcx.constraints.push({
                                 type: 'SubtypeOf',
@@ -1477,10 +1559,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             case 'Array': return { ...ty, flags, elemTy: instantiateTyVars(ty.elemTy) };
             case 'TyVid': return infcx.tyVars[ty.id].constrainedTy!;
             case 'FnDef': throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
-            case 'i32':
+            case 'int':
             case 'string':
             case 'void':
             case 'TyParam':
+            case 'bool':
             case 'never': return ty;
             case 'Pointer': return { ...ty, flags, pointee: instantiateTyVars(ty.pointee) };
             case 'Record':
@@ -1513,7 +1596,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
 }
 
-type MirValue = { type: 'i32', value: number }
+type MirValue = { type: 'int', ity: IntTy, value: number }
+    | { type: 'bool', value: boolean }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
@@ -1545,8 +1629,10 @@ function mangleTy(ty: Ty): string {
         case 'never':
         case 'void':
         case 'string':
-        case 'i32':
+        case 'bool':
             return ty.type;
+        case 'int':
+            return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'Array':
             return `$array$${ty.len}$${mangleTy(ty.elemTy)}`;
         case 'TyParam':
@@ -1667,7 +1753,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         }
         function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
             switch (expr.type) {
-                case 'Number': return { type: 'i32', value: expr.value };
+                case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
                 case 'Literal': {
                     const resolution = res.valueResolutions.get(expr)!;
                     switch (resolution.type) {
@@ -1797,6 +1883,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         value: fields
                     }
                 }
+                case 'Bool': return { type: 'bool', value: expr.value };
                 default: todo(`Unhandled expr ${expr.type}`);
             }
         }
@@ -1824,9 +1911,11 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
     const _codegenCache = new Set<string>();
     let fnSection = '';
 
+
     function llTy(ty: Ty): string {
         switch (ty.type) {
-            case 'i32': return 'i32';
+            case 'bool': return 'i1';
+            case 'int': return `i${ty.value.bits}`;
             case 'void': return 'void';
             case 'Pointer':
                 return `${llTy(ty.pointee)}*`;
@@ -1859,7 +1948,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     return llTy(local.ty);
                 }
             }
-            case 'i32': return 'i32';
+            case 'int': return `i${val.ity.bits}`;
+            case 'bool': return 'i1';
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef': throw new Error('FnDef values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
@@ -1927,7 +2017,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             function compileValueToLocal(val: MirValue): string {
                 switch (val.type) {
                     case 'Local': return `%l.${val.value}`;
-                    case 'i32': return val.value.toString();
+                    case 'int':
+                    case 'bool': return val.value.toString();
                     case 'Unreachable': return 'poison';
                     case 'FnDef': throw new Error('FnDef values need to be treated specially');
                     case 'Record': {
