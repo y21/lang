@@ -525,7 +525,7 @@ function parse(src: string): Program {
 
                     expr = { type: 'Number', span: unsuffixSpan, suffix: (foundSuffix[1] as { type: 'int', value: IntTy }).value, value: unsuffixSnip };
                 } else {
-                    expr = { type: 'Number', span: tokens[i].span, suffix: { bits: 32, signed: true }, value: +snip(tokens[i].span) };
+                    expr = { type: 'Number', span: tokens[i].span, suffix: { signed: true, bits: 32, }, value: +snip(tokens[i].span) };
                 }
                 break;
             }
@@ -1117,14 +1117,14 @@ function removeTyVid(ty: Ty): Ty {
     ty.flags &= ~TYVID_MASK;
     return ty;
 }
-const I8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 8, signed: true } };
-const I16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 16, signed: true } };
-const I32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 32, signed: true } };
-const I64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 64, signed: true } };
-const U8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 8, signed: false } };
-const U16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 16, signed: false } };
-const U32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 32, signed: false } };
-const U64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 64, signed: false } };
+const I8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
+const I16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
+const I32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
+const I64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
+const U8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
+const U16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
+const U32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
+const U64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
 const BOOL: Ty = { type: 'bool', flags: EMPTY_FLAGS };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
@@ -1704,8 +1704,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             madeProgress = true;
         };
 
-        while (madeProgress) {
-            madeProgress = false;
+        while (madeProgress && infcx.constraints.length > 0) {
             for (let i = infcx.constraints.length - 1; i >= 0; i--) {
                 const constraint = infcx.constraints.pop()!;
                 const sub = infcx.tryResolve(constraint.sub);
