@@ -328,6 +328,7 @@ type Expr = { span: Span } & (
     | { type: "Record"; fields: RecordFields<Expr> }
     | { type: "If"; condition: Expr; then: Expr; else: Expr | null }
     | { type: "While"; condition: Expr; body: Expr }
+    | { type: "Tuple", elements: Expr[] }
 );
 
 
@@ -606,6 +607,24 @@ function parse(src: string): Program {
                     stmts.push(parseStmt());
                 }
                 return { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
+            }
+            case TokenType.LParen: {
+                // Either tuple type or grouping, depending on if the expression is followed by a comma
+                const lparenSpan = tokens[i++].span;
+                const first = parseRootExpr();
+                if (eatToken(TokenType.Comma, false)) {
+                    const elements = [first];
+                    while (!eatToken(TokenType.RParen, false)) {
+                        if (elements.length > 1) {
+                            eatToken(TokenType.Comma, true);
+                        }
+                        elements.push(parseRootExpr());
+                    }
+                    return { type: 'Tuple', elements, span: joinSpan(lparenSpan, tokens[i - 1].span) };
+                } else {
+                    eatToken(TokenType.RParen);
+                    return first;
+                }
             }
             case TokenType.If: {
                 const ifSpan = tokens[i++].span;
@@ -1049,6 +1068,11 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Unary':
                 resolveExpr(expr.rhs);
                 break;
+            case 'Tuple':
+                for (const element of expr.elements) {
+                    resolveExpr(element);
+                }
+                break;
             default: assertUnreachable(expr);
         }
     }
@@ -1443,6 +1467,11 @@ function forEachExpr(expr: Expr, f: (e: Expr) => void) {
         case 'Unary':
             forEachExpr(expr.rhs, f);
             break;
+        case 'Tuple':
+            for (const element of expr.elements) {
+                forEachExpr(element, f);
+            }
+            break;
         default: assertUnreachable(expr);
     }
 }
@@ -1733,6 +1762,16 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     infcx.sub('Unary', expr.rhs.span, typeckExpr(expr.rhs), expectedTy);
                     return resultTy;
                 }
+                case 'Tuple': {
+                    let flags = EMPTY_FLAGS;
+                    const elements: Ty[] = [];
+                    for (const element of expr.elements) {
+                        const ty = typeckExpr(element);
+                        flags |= ty.flags;
+                        elements.push(ty);
+                    }
+                    return { type: 'Tuple', elements, flags };
+                }
                 default: assertUnreachable(expr);
             }
         }
@@ -1934,13 +1973,16 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
 type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'bool', value: boolean }
-    | { type: 'unit' }
     | { type: 'str', value: string }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
     | { type: 'ExternFnDef', value: ExternFnDecl }
-    | { type: 'Record', value: RecordFields<MirValue> };
+    | { type: 'Record', value: RecordFields<MirValue> }
+    | { type: 'Tuple', value: MirValue[] };
+
+const UNIT_MIR: MirValue = { type: 'Tuple', value: [] };
+
 /**
  * `temporary` indicates whether this local is used for a subexpression.
  * These are trivially in SSA form and are never written to except when initialized.
@@ -2051,8 +2093,11 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             blocks.push({ stmts: [], terminator: null });
             return blocks.length - 1;
         };
-        // _0 = return place
-        assert(addLocal(returnTy(decl.sig, typeck), false) === 0);
+        const hasDefaultReturn = decl.sig.ret === undefined;
+        if (decl.sig.ret !== undefined) {
+            // _0 = return place
+            assert(addLocal(typeck.loweredTys.get(decl.sig.ret)!, false) === 0);
+        }
         const returnPlace = locals[0] as MirLocal<false>;
         const returnId = 0 as MirLocalId<false>;
         const blocks: MirBlock[] = [
@@ -2109,6 +2154,19 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             }
         }
 
+        function lowerReturnValue(value: MirValue): MirValue {
+            if (hasDefaultReturn) {
+                block.terminator = { type: 'Return' };
+            } else {
+                block.stmts.push({ type: 'Assignment', assignee: { base: returnId, projections: [] }, value });
+                block.terminator = { type: 'Return' };
+            }
+            let newBlock = { stmts: [], terminator: null };
+            blocks.push(newBlock);
+            block = newBlock;
+            return { type: 'Unreachable' };
+        }
+
         function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
@@ -2133,12 +2191,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 }
                 case 'Return': {
                     const ret = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
-                    block.stmts.push({ type: 'Assignment', assignee: { base: returnId, projections: [] }, value: ret });
-                    block.terminator = { type: 'Return' };
-                    let newBlock = { stmts: [], terminator: null };
-                    blocks.push(newBlock);
-                    block = newBlock;
-                    return { type: 'Unreachable' };
+                    return lowerReturnValue(ret);
                 }
                 case 'Binary': {
                     const lhs = asValue(lowerExpr(expr.lhs), typeck.exprTys.get(expr.lhs)!);
@@ -2181,7 +2234,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         assignee,
                         value
                     });
-                    return { type: 'unit' };
+                    return UNIT_MIR;
                 }
                 case 'Deref': {
                     const pointee = lowerExpr(expr.pointee);
@@ -2268,7 +2321,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     block.terminator = { type: 'Jump', target: joinedBlock };
 
                     block = blocks[joinedBlock];
-                    return { type: 'unit' };
+                    return UNIT_MIR;
                 }
                 case 'While':
                     const conditionBlock = addBlock();
@@ -2285,12 +2338,18 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     block.terminator = { type: 'Jump', target: conditionBlock };
 
                     block = blocks[joinedBlock];
-                    return { type: 'unit' };
+                    return UNIT_MIR;
                 case 'Block': {
                     for (const stmt of expr.stmts) {
                         lowerStmt(stmt);
                     }
-                    return { type: 'unit' };
+                    return UNIT_MIR;
+                }
+                case 'Tuple': {
+                    const elements: MirValue[] = expr.elements.map(expr => {
+                        return asValue(lowerExpr(expr), typeck.exprTys.get(expr)!);
+                    });
+                    return { type: 'Tuple', value: elements };
                 }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
@@ -2303,13 +2362,13 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         if (decl.sig.ret === undefined) {
             // append implicit `return ()` statement for default return fns
             assert(block.terminator === null);
-            lowerExpr({ type: 'Return', span: [0, 0], value: { type: 'Block', span: [0, 0], stmts: [] } });
+            lowerReturnValue(UNIT_MIR);
         }
 
         return {
             locals,
             blocks,
-            parameters
+            parameters,
         };
     }
 
@@ -2377,7 +2436,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'FnDef':
             case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
-            case 'unit': return '{}';
+            case 'Tuple': return '{' + val.value.map(v => llValTy(mir, v)).join(', ') + '}';
         }
     }
 
@@ -2443,10 +2502,11 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             };
 
             const ret = mir.locals[0].ty;
+            const hasDefaultReturn = decl.sig.ret === undefined;
 
             const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
 
-            let output = `define ${llTy(ret)} @${mangledName}(${parameterList}) {\n`;
+            let output = `define ${hasDefaultReturn ? 'void' : llTy(ret)} @${mangledName}(${parameterList}) {\n`;
 
             function compileValueToLocal(val: MirValue): string {
                 switch (val.type) {
@@ -2458,11 +2518,13 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         const ctTy = `[${val.value.length} x i8]`;
                         constSection += `${ctId} = private constant ${ctTy} c"${val.value}"`;
                         return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${val.value.length}}`;
-                    case 'unit': return '{}';
                     case 'Unreachable': return 'poison';
                     case 'FnDef':
                     case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
-                    case 'Record': {
+                    case 'Record':
+                    case 'Tuple': {
+                        // in the codegen stage, records and tuples are almost identical, so we can largely handle them the same here...
+                        //
                         // compile {x: 1i32, y: 2i64} to:
                         //
                         // %t1 = alloca {i32, i64}
@@ -2480,8 +2542,17 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         tmpOut += `${tmp} = alloca ${tyS}\n`;
                         for (let i = 0; i < val.value.length; i++) {
                             const ptrLocal = `%p.${tempLocal()}`;
-                            const valueS = compileValueToLocal(val.value[i][1]);
-                            const valTyS = llValTy(mir, val.value[i][1]);
+                            const valueS = compileValueToLocal(
+                                val.type === 'Record' ?
+                                    val.value[i][1]
+                                    : val.value[i]
+                            );
+                            const valTyS = llValTy(
+                                mir,
+                                val.type === 'Record'
+                                    ? val.value[i][1]
+                                    : val.value[i]
+                            );
                             tmpOut += `${ptrLocal} = getelementptr ${tyS}, ${tyS}* ${tmp}, i32 0, i32 ${i}\n`;
                             tmpOut += `store ${valTyS} ${valueS}, ${valTyS}* ${ptrLocal}\n`;
                         }
@@ -2652,9 +2723,13 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 if (terminator) {
                     switch (terminator.type) {
                         case 'Return':
-                            const temp = tempLocal();
-                            output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
-                            output += `ret ${llTy(ret)} %ret.${temp}\n`;
+                            if (hasDefaultReturn) {
+                                output += 'ret void\n';
+                            } else {
+                                const temp = tempLocal();
+                                output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
+                                output += `ret ${llTy(ret)} %ret.${temp}\n`;
+                            }
                             break;
                         case 'Call':
                             let mangledName: string;
