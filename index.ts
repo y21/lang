@@ -135,6 +135,9 @@ enum TokenType {
     RBrace,
     Colon,
     Assign,
+    EqEq,
+    Not,
+    NotEq,
     Semi,
     Comma,
     Mut,
@@ -146,7 +149,9 @@ enum TokenType {
     Slash,
     Dot,
     Lt,
+    Le,
     Gt,
+    Ge,
     And,
     Or,
 }
@@ -184,11 +189,40 @@ function tokenize(src: string): Token[] {
             case '{': tokens.push({ span: [start, i + 1], ty: TokenType.LBrace }); break;
             case '}': tokens.push({ span: [start, i + 1], ty: TokenType.RBrace }); break;
             case ':': tokens.push({ span: [start, i + 1], ty: TokenType.Colon }); break;
-            case '=': tokens.push({ span: [start, i + 1], ty: TokenType.Assign }); break;
+            case '!':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.NotEq });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Not });
+                }
+                break;
+            case '=':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.EqEq });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Assign });
+                }
+                break;
             case ';': tokens.push({ span: [start, i + 1], ty: TokenType.Semi }); break;
             case '.': tokens.push({ span: [start, i + 1], ty: TokenType.Dot }); break;
-            case '<': tokens.push({ span: [start, i + 1], ty: TokenType.Lt }); break;
-            case '>': tokens.push({ span: [start, i + 1], ty: TokenType.Gt }); break;
+            case '<':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.Le });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Lt });
+                }
+                break;
+            case '>':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.Ge });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Gt });
+                }
+                break;
             case ',': tokens.push({ span: [start, i + 1], ty: TokenType.Comma }); break;
             case '+': tokens.push({ span: [start, i + 1], ty: TokenType.Plus }); break;
             case '-': tokens.push({ span: [start, i + 1], ty: TokenType.Minus }); break;
@@ -252,24 +286,47 @@ function assert(cond: boolean, msg?: string) {
         }
     }
 }
+type BinaryOp =
+    | TokenType.Plus
+    | TokenType.Minus
+    | TokenType.Star
+    | TokenType.Slash
+    | TokenType.EqEq
+    | TokenType.NotEq
+    | TokenType.Lt
+    | TokenType.Le
+    | TokenType.Gt
+    | TokenType.Ge;
+
+type UnaryOp = TokenType.Not;
+
 type Expr = { span: Span } & (
     | { type: "Block"; stmts: Stmt[] }
     | { type: "Literal"; ident: string }
     | { type: "FnCall"; args: Expr[]; callee: Expr }
-    | { type: "Index"; target: Expr; index: Expr; }
+    | { type: "Index"; target: Expr; index: Expr }
     | { type: "ArrayLiteral"; elements: Expr[] }
-    | { type: "Number"; value: number, suffix: IntTy }
-    | { type: "Bool", value: boolean }
+    | { type: "Number"; value: number; suffix: IntTy }
+    | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
     | { type: "Assignment"; target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string }
     | { type: "Return"; value: Expr }
-    | { type: "Binary"; op: TokenType; lhs: Expr; rhs: Expr }
-    | { type: 'AddrOf', pointee: Expr, mtb: Mutability }
-    | { type: 'Deref', pointee: Expr }
-    | { type: 'Record', fields: RecordFields<Expr> }
-    | { type: 'If', condition: Expr, then: Expr, else: Expr | null }
+    | { type: "Unary"; op: UnaryOp; rhs: Expr }
+    | {
+        type: "Binary";
+        op: BinaryOp;
+        lhs: Expr;
+        rhs: Expr;
+    }
+    | { type: "AddrOf"; pointee: Expr; mtb: Mutability }
+    | { type: "Deref"; pointee: Expr }
+    | { type: "Record"; fields: RecordFields<Expr> }
+    | { type: "If"; condition: Expr; then: Expr; else: Expr | null }
+    | { type: "While"; condition: Expr; body: Expr }
 );
+
+
 
 
 type LetDecl = { type: 'LetDecl', name: string, init: Expr };
@@ -304,7 +361,8 @@ type Associativity = LeftToRight | RightToLeft;
 const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
     // Somewhere between indexing/dot and multiplicative
     [TokenType.And]: 15,
-    [TokenType.Star]: 15
+    [TokenType.Star]: 15,
+    [TokenType.Not]: 15,
 };
 
 const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
@@ -319,6 +377,12 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     // Additive
     [TokenType.Plus]: 11,
     [TokenType.Minus]: 11,
+    [TokenType.Lt]: 9,
+    [TokenType.Le]: 9,
+    [TokenType.Gt]: 9,
+    [TokenType.Ge]: 9,
+    [TokenType.EqEq]: 8,
+    [TokenType.NotEq]: 8,
     // Assignment x = y
     [TokenType.Assign]: 2
 };
@@ -331,6 +395,13 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.Minus]: 'ltr',
     [TokenType.Star]: 'ltr',
     [TokenType.Slash]: 'ltr',
+    [TokenType.Not]: 'ltr',
+    [TokenType.Lt]: 'ltr',
+    [TokenType.Le]: 'ltr',
+    [TokenType.Gt]: 'ltr',
+    [TokenType.Ge]: 'ltr',
+    [TokenType.EqEq]: 'ltr',
+    [TokenType.NotEq]: 'ltr',
 };
 
 function parse(src: string): Program {
@@ -484,12 +555,15 @@ function parse(src: string): Program {
             case TokenType.If: {
                 const ifSpan = tokens[i++].span;
                 const condition = parseRootExpr();
-                const body = parseRootExpr();
-                if (body.type !== 'Block') {
-                    throw new Error('if body must be a block');
-                }
+                const body = parseBlockExpr();
                 // TODO: else
                 return { type: 'If', condition, then: body, else: null, span: joinSpan(ifSpan, tokens[i - 1].span) };
+            }
+            case TokenType.While: {
+                const whileSpan = tokens[i++].span;
+                const condition = parseRootExpr();
+                const body = parseBlockExpr();
+                return { type: 'While', body, condition, span: joinSpan(whileSpan, tokens[i - 1].span) };
             }
             case TokenType.And: {
                 // Unary &
@@ -504,6 +578,13 @@ function parse(src: string): Program {
                 const starSpan = tokens[i++].span;
                 const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.Star]!);
                 expr = { type: 'Deref', pointee, span: joinSpan(starSpan, pointee.span) };
+                break;
+            }
+            case TokenType.Not: {
+                // Unary !
+                const notSpan = tokens[i++].span;
+                const rhs = parseExpr(UNARY_PRECEDENCE[TokenType.Not]!);
+                expr = { type: 'Unary', op: TokenType.Not, rhs, span: joinSpan(notSpan, rhs.span) };
                 break;
             }
             default:
@@ -547,6 +628,12 @@ function parse(src: string): Program {
                 case TokenType.Plus:
                 case TokenType.Minus:
                 case TokenType.Star:
+                case TokenType.EqEq:
+                case TokenType.NotEq:
+                case TokenType.Lt:
+                case TokenType.Le:
+                case TokenType.Gt:
+                case TokenType.Ge:
                 case TokenType.Slash: {
                     const rhs = parseExpr(prec);
                     expr = { type: 'Binary', op: op.ty, lhs: expr, rhs, span: joinSpan(expr.span, rhs.span) };
@@ -572,6 +659,11 @@ function parse(src: string): Program {
         return generics;
     }
 
+    let parseBlockExpr = () => {
+        const expr = parseRootExpr();
+        if (expr.type !== 'Block') throw new Error(`expected block expression, got ${expr.type}`);
+        return expr;
+    };
     let parseRootExpr = () => parseExpr(-1);
 
     function parseStmt(): Stmt {
@@ -843,6 +935,13 @@ function computeResolutions(ast: Program): Resolutions {
                     resolveExpr(expr.else);
                 }
                 break;
+            case 'While':
+                resolveExpr(expr.body);
+                resolveExpr(expr.condition);
+                break;
+            case 'Unary':
+                resolveExpr(expr.rhs);
+                break;
             default: assertUnreachable(expr);
         }
     }
@@ -946,7 +1045,7 @@ const U64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { bits: 64, signed: fa
 const BOOL: Ty = { type: 'bool', flags: EMPTY_FLAGS };
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'UseInArithmeticOperation' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument';
+type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary';
 type Constraint = { cause: ConstraintCause, at: Span } & ConstraintType;
 
 type FnLocalState = {
@@ -1208,6 +1307,13 @@ function forEachExpr(expr: Expr, f: (e: Expr) => void) {
                 forEachExpr(expr.else, f);
             }
             break;
+        case 'While':
+            forEachExpr(expr.condition, f);
+            forEachExpr(expr.body, f);
+            break;
+        case 'Unary':
+            forEachExpr(expr.rhs, f);
+            break;
         default: assertUnreachable(expr);
     }
 }
@@ -1352,9 +1458,34 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 case 'Binary': {
                     const lhsTy = typeckExpr(expr.lhs);
                     const rhsTy = typeckExpr(expr.rhs);
-                    infcx.sub('UseInArithmeticOperation', expr.lhs.span, lhsTy, rhsTy);
-                    infcx.sub('UseInArithmeticOperation', expr.rhs.span, rhsTy, lhsTy);
-                    return lhsTy;
+                    let expectedLhsTy: Ty;
+                    let expectedRhsTy: Ty;
+                    let resultTy: Ty;
+                    // TODO: we should constrain it to any int type
+                    switch (expr.op) {
+                        case TokenType.Plus:
+                        case TokenType.Minus:
+                        case TokenType.Star:
+                        case TokenType.Slash:
+                            expectedLhsTy = rhsTy;
+                            expectedRhsTy = lhsTy;
+                            resultTy = lhsTy;
+                            break;
+                        case TokenType.Lt:
+                        case TokenType.Le:
+                        case TokenType.Gt:
+                        case TokenType.Ge:
+                        case TokenType.EqEq:
+                        case TokenType.NotEq:
+                            expectedLhsTy = rhsTy;
+                            expectedRhsTy = lhsTy;
+                            resultTy = BOOL;
+                            break;
+                        default: assertUnreachable(expr);
+                    }
+                    infcx.sub('Binary', expr.lhs.span, lhsTy, expectedLhsTy);
+                    infcx.sub('Binary', expr.rhs.span, rhsTy, expectedRhsTy);
+                    return resultTy;
                 }
                 case 'AddrOf': {
                     const pointee = typeckExpr(expr.pointee);
@@ -1431,12 +1562,27 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                     }
                     return field[1];
                 case 'If':
-                    typeckExpr(expr.condition);
+                    infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
                     typeckExpr(expr.then);
                     if (expr.else) {
                         typeckExpr(expr.else);
                     }
                     return { type: 'void', flags: EMPTY_FLAGS };
+                case 'While':
+                    infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
+                    typeckExpr(expr.body);
+                    return { type: 'void', flags: EMPTY_FLAGS };
+                case 'Unary': {
+                    let expectedTy: Ty;
+                    let resultTy: Ty;
+                    switch (expr.op) {
+                        // TODO: we could(should?) allow !num
+                        case TokenType.Not: expectedTy = BOOL; resultTy = BOOL; break;
+                    }
+
+                    infcx.sub('Unary', expr.rhs.span, typeckExpr(expr.rhs), expectedTy);
+                    return resultTy;
+                }
                 default: assertUnreachable(expr);
             }
         }
@@ -1550,8 +1696,8 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
                             let message: string;
                             switch (constraint.cause) {
-                                case 'UseInArithmeticOperation':
-                                    message = `cannot add ${sub.type} to ${sup.type}`;
+                                case 'Binary':
+                                    message = `left-hand side and right-hand side must be of the same type, got ${sub.type} and ${sup.type}`;
                                     break;
                                 default: message = `${ppTy(sub)} is not a subtype of ${ppTy(sup)} (reason: '${constraint.cause}')`;
                             }
@@ -1650,7 +1796,8 @@ type MirLocalId<temporary extends boolean = boolean> = number;
 type Projection = { type: 'Field', property: string } | { type: 'Deref' };
 type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
 type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
-    | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
+    | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
+    | { type: 'Unary', op: UnaryOp, assignee: MirLocalId<true>, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> }
     | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
@@ -1735,6 +1882,10 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             ty = instantiateTy(ty, args);
             locals.push({ ty, temporary });
             return locals.length - 1;
+        };
+        const addBlock = (): MirBlockId => {
+            blocks.push({ stmts: [], terminator: null });
+            return blocks.length - 1;
         };
         // _0 = return place
         assert(addLocal(typeck.loweredTys.get(decl.ret)!, false) === 0);
@@ -1825,6 +1976,12 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
                     const res = addLocal(typeck.exprTys.get(expr)!, true);
                     block.stmts.push({ type: 'BinOp', assignee: res, lhs, rhs, op: expr.op });
+                    return { type: 'Local', value: res };
+                }
+                case 'Unary': {
+                    const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
+                    const res = addLocal(typeck.exprTys.get(expr)!, true);
+                    block.stmts.push({ type: 'Unary', assignee: res, rhs, op: expr.op });
                     return { type: 'Local', value: res };
                 }
                 case 'AddrOf': {
@@ -1933,10 +2090,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 case 'Bool': return { type: 'bool', value: expr.value };
                 case 'If': {
                     const condition = asValue(lowerExpr(expr.condition), BOOL);
-                    const joinedBlock: MirBlockId = blocks.length;
-                    blocks.push({ stmts: [], terminator: null });
-                    const thenBlock: MirBlockId = blocks.length;
-                    blocks.push({ stmts: [], terminator: null });
+                    const joinedBlock = addBlock();
+                    const thenBlock = addBlock();
                     block.terminator = { type: 'Conditional', else: joinedBlock, then: thenBlock, condition };
 
                     block = blocks[thenBlock];
@@ -1946,6 +2101,22 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     block = blocks[joinedBlock];
                     return { type: 'unit' };
                 }
+                case 'While':
+                    const conditionBlock = addBlock();
+                    const bodyBlock = addBlock();
+                    const joinedBlock = addBlock();
+                    block.terminator = { type: 'Jump', target: conditionBlock };
+                    block = blocks[conditionBlock];
+
+                    const condition = asValue(lowerExpr(expr.condition), BOOL);
+                    block.terminator = { type: 'Conditional', condition, then: bodyBlock, else: joinedBlock };
+
+                    block = blocks[bodyBlock];
+                    lowerExpr(expr.body);
+                    block.terminator = { type: 'Jump', target: conditionBlock };
+
+                    block = blocks[joinedBlock];
+                    return { type: 'unit' };
                 case 'Block': {
                     for (const stmt of expr.stmts) {
                         lowerStmt(stmt);
@@ -2041,6 +2212,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 case 'BinOp':
                     patchObjKey(s, 'assignee');
                     patchValue(s.lhs);
+                    patchValue(s.rhs);
+                    break;
+                case 'Unary':
+                    patchObjKey(s, 'assignee');
                     patchValue(s.rhs);
                     break;
                 case 'Copy':
@@ -2223,12 +2398,21 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             break;
                         }
                         case 'BinOp': {
+                            const local = getLocal(stmt.assignee);
+                            let signed = local.ty.type === 'int' && local.ty.value.signed;
                             let binOp: string;
                             switch (stmt.op) {
                                 case TokenType.Plus: binOp = 'add'; break;
                                 case TokenType.Minus: binOp = 'sub'; break;
                                 case TokenType.Star: binOp = 'mul'; break;
-                                default: todo('BinOp ' + stmt.op);
+                                case TokenType.Slash: binOp = signed ? 'sdiv' : 'udiv'; break;
+                                case TokenType.Lt: binOp = 'icmp ' + (signed ? 'slt' : 'ult'); break;
+                                case TokenType.Le: binOp = 'icmp ' + (signed ? 'sle' : 'ule'); break;
+                                case TokenType.Gt: binOp = 'icmp ' + (signed ? 'sgt' : 'ugt'); break;
+                                case TokenType.Ge: binOp = 'icmp ' + (signed ? 'sge' : 'uge'); break;
+                                case TokenType.EqEq: binOp = 'icmp eq'; break;
+                                case TokenType.NotEq: binOp = 'icmp ne'; break;
+                                default: assertUnreachable(stmt);
                             }
                             const lhsS = compileValueToLocal(stmt.lhs);
                             const rhsS = compileValueToLocal(stmt.rhs);
@@ -2237,7 +2421,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         }
                         case 'Copy': {
                             const { finalLocal, finalTy } = compilePlaceExpr(stmt.place);
-
                             output += `%l.${stmt.assignee} = load ${llTy(finalTy)}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
                         }
@@ -2258,6 +2441,15 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             const bitcastPtr = `%t.${tempLocal()}`;
                             output += `${bitcastPtr} = bitcast ${fromTyS}* ${castSourcePtr} to ${toTyS}*\n`;
                             output += `%l.${stmt.assignee} = load ${toTyS}, ${toTyS}* ${bitcastPtr}\n`;
+                            break
+                        case 'Unary':
+                            switch (stmt.op) {
+                                case TokenType.Not:
+                                    const rhs = compileValueToLocal(stmt.rhs);
+                                    output += `%l.${stmt.assignee} = xor i1 ${rhs}, true\n`
+                                    break;
+                                default: assertUnreachable(stmt);
+                            }
                             break;
                         default: assertUnreachable(stmt);
                     }
