@@ -119,6 +119,9 @@ enum TokenType {
     Fn,
     Let,
     Return,
+    If,
+    For,
+    While,
     Type,
     True,
     False,
@@ -221,6 +224,9 @@ function tokenize(src: string): Token[] {
                         case 'constructible': ty = TokenType.Constructible; break;
                         case 'true': ty = TokenType.True; break;
                         case 'false': ty = TokenType.False; break;
+                        case 'if': ty = TokenType.If; break;
+                        case 'for': ty = TokenType.For; break;
+                        case 'while': ty = TokenType.While; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });
@@ -262,6 +268,7 @@ type Expr = { span: Span } & (
     | { type: 'AddrOf', pointee: Expr, mtb: Mutability }
     | { type: 'Deref', pointee: Expr }
     | { type: 'Record', fields: RecordFields<Expr> }
+    | { type: 'If', condition: Expr, then: Expr, else: Expr | null }
 );
 
 
@@ -473,6 +480,16 @@ function parse(src: string): Program {
                     stmts.push(parseStmt());
                 }
                 return { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
+            }
+            case TokenType.If: {
+                const ifSpan = tokens[i++].span;
+                const condition = parseRootExpr();
+                const body = parseRootExpr();
+                if (body.type !== 'Block') {
+                    throw new Error('if body must be a block');
+                }
+                // TODO: else
+                return { type: 'If', condition, then: body, else: null, span: joinSpan(ifSpan, tokens[i - 1].span) };
             }
             case TokenType.And: {
                 // Unary &
@@ -817,6 +834,13 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Record':
                 for (const [, v] of expr.fields) {
                     resolveExpr(v);
+                }
+                break;
+            case 'If':
+                resolveExpr(expr.condition);
+                resolveExpr(expr.then);
+                if (expr.else) {
+                    resolveExpr(expr.else);
                 }
                 break;
             default: assertUnreachable(expr);
@@ -1177,6 +1201,13 @@ function forEachExpr(expr: Expr, f: (e: Expr) => void) {
         case 'Property':
             forEachExpr(expr.target, f);
             break;
+        case 'If':
+            forEachExpr(expr.condition, f);
+            forEachExpr(expr.then, f);
+            if (expr.else) {
+                forEachExpr(expr.else, f);
+            }
+            break;
         default: assertUnreachable(expr);
     }
 }
@@ -1399,6 +1430,13 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         throw new Error(`field '${expr.property}' not found on type ${ppTy(target)}`);
                     }
                     return field[1];
+                case 'If':
+                    typeckExpr(expr.condition);
+                    typeckExpr(expr.then);
+                    if (expr.else) {
+                        typeckExpr(expr.else);
+                    }
+                    return { type: 'void', flags: EMPTY_FLAGS };
                 default: assertUnreachable(expr);
             }
         }
@@ -1598,6 +1636,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
 
 type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'bool', value: boolean }
+    | { type: 'unit' }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
@@ -1610,13 +1649,15 @@ type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary: tempor
 type MirLocalId<temporary extends boolean = boolean> = number;
 type Projection = { type: 'Field', property: string } | { type: 'Deref' };
 type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
-type MirStmt = { type: 'Assignment', assignee: MirLocalId<false>, value: MirValue }
+type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'BinOp', op: TokenType, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> }
     | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
 type MirTerminator = { type: 'Return' }
-    | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId };
+    | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl, sig: InstantiatedFnSig, target: MirBlockId }
+    | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
+    | { type: 'Jump', target: MirBlockId };
 type MirBlock = {
     stmts: MirStmt[];
     terminator: MirTerminator | null;
@@ -1743,7 +1784,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     const local = addLocal(ty, false);
                     astLocalToMirLocal.set(stmt, local);
                     const value = asValue(lowerExpr(stmt.init), ty);
-                    block.stmts.push({ type: 'Assignment', assignee: local, value });
+                    block.stmts.push({ type: 'Assignment', assignee: { base: local, projections: [] }, value });
                     break;
                 }
                 case 'Expr': lowerExpr(stmt.value); break;
@@ -1751,6 +1792,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 default: assertUnreachable(stmt);
             }
         }
+
         function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
@@ -1781,7 +1823,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 }
                 case 'Return': {
                     const ret = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
-                    block.stmts.push({ type: 'Assignment', assignee: returnId, value: ret });
+                    block.stmts.push({ type: 'Assignment', assignee: { base: returnId, projections: [] }, value: ret });
                     block.terminator = { type: 'Return' };
                     let newBlock = { stmts: [], terminator: null };
                     blocks.push(newBlock);
@@ -1809,6 +1851,19 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         // TODO: we can const-promote number literals
                         default: throw new Error(`cannot take address of ${expr.pointee.type}`);
                     }
+                }
+                case 'Assignment': {
+                    const assignee = lowerExpr(expr.target);
+                    if (assignee.type !== 'Place') {
+                        throw new Error('assignment LHS must be a place expression');
+                    }
+                    const value = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
+                    block.stmts.push({
+                        type: 'Assignment',
+                        assignee,
+                        value
+                    });
+                    return { type: 'unit' };
                 }
                 case 'Deref': {
                     const pointee = lowerExpr(expr.pointee);
@@ -1884,6 +1939,27 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     }
                 }
                 case 'Bool': return { type: 'bool', value: expr.value };
+                case 'If': {
+                    const condition = asValue(lowerExpr(expr.condition), BOOL);
+                    const joinedBlock: MirBlockId = blocks.length;
+                    blocks.push({ stmts: [], terminator: null });
+                    const thenBlock: MirBlockId = blocks.length;
+                    blocks.push({ stmts: [], terminator: null });
+                    block.terminator = { type: 'Conditional', else: joinedBlock, then: thenBlock, condition };
+
+                    block = blocks[thenBlock];
+                    lowerExpr(expr.then);
+                    block.terminator = { type: 'Jump', target: joinedBlock };
+
+                    block = blocks[joinedBlock];
+                    return { type: 'unit' };
+                }
+                case 'Block': {
+                    for (const stmt of expr.stmts) {
+                        lowerStmt(stmt);
+                    }
+                    return { type: 'unit' };
+                }
                 default: todo(`Unhandled expr ${expr.type}`);
             }
         }
@@ -1937,7 +2013,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
         return mir.locals[id] as MirLocal<temporary>;
     }
 
-
     function llValTy(mir: MirBody, val: MirValue): string {
         switch (val.type) {
             case 'Local': {
@@ -1953,6 +2028,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef': throw new Error('FnDef values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
+            case 'unit': return '{}';
         }
     }
 
@@ -1969,7 +2045,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
             }
             switch (s.type) {
                 case 'AddrOfLocal': aliasGraph.set(s.assignee, s.local); break;
-                case 'Assignment': patchObjKey(s, 'assignee'); patchValue(s.value); break;
+                case 'Assignment': patchObjKey(s.assignee, 'base'); patchValue(s.value); break;
                 case 'BinOp':
                     patchObjKey(s, 'assignee');
                     patchValue(s.lhs);
@@ -1979,7 +2055,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     patchObjKey(s, 'assignee');
                     patchObjKey(s.place, 'base');
                     break;
-                case 'Return': break;
+                case 'Return':
+                    break;
                 case 'Call':
                     s.args.forEach(patchValue);
                     break;
@@ -1987,6 +2064,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     patchObjKey(s, 'assignee');
                     patchValue(s.value);
                     break;
+                case 'Conditional':
+                    patchValue(s.condition);
+                    break;
+                case 'Jump': break;
                 default: assertUnreachable(s);
             }
         }
@@ -2019,6 +2100,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     case 'Local': return `%l.${val.value}`;
                     case 'int':
                     case 'bool': return val.value.toString();
+                    case 'unit': return '{}';
                     case 'Unreachable': return 'poison';
                     case 'FnDef': throw new Error('FnDef values need to be treated specially');
                     case 'Record': {
@@ -2050,6 +2132,64 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                         return loadLocal;
                     }
                 }
+            }
+
+            function compilePlaceExpr(place: MirPlace): { finalTy: Ty, finalLocal: string } {
+                const rawBase = mir.locals[place.base];
+
+                let finalLocal: string;
+                let finalTy = normalize(rawBase.ty);
+                if (rawBase.temporary) {
+                    // This could be e.g.:
+                    //     _ = f().v.x  where f(): {v:{x:i32}}
+                    // 
+                    // _1 = f()
+                    // _2 = copy {base: _1 /* {v:{x:i32}} */, projections: ['v', 'x']}
+                    //
+                    // We generally want to codegen these projections as a series of GEP, which requires a pointer operand
+                    // so we alloca a new variable that we store the base in.
+                    const baseId = `%t.${tempLocal()}`;
+                    output += `${baseId} = alloca ${llTy(finalTy)}\n`;
+                    output += `store ${llTy(finalTy)} %l.${place.base}, ${llTy(finalTy)}* ${baseId}\n`;
+                    finalLocal = baseId;
+                } else {
+                    // If it's not a temporary, then the base is most likely a local variable.
+                    // In any case, `temporary = false` means that it must be alloca'd, so there is no need to do the above,
+                    // as we already have a pointer that we can GEP into.
+                    finalLocal = `%l.${place.base}`;
+                }
+
+                // For the above example f().v.x:
+                //
+                // ; process base:
+                // _1 = f(): {v:{x:i32}}
+                // _2 = alloca {v:{x:i32}}
+                // store _1 -> _2
+                //
+                // ; process projections:
+                // _3 = getelementptr {v:{x:i32}}, _2, 0, 0      ; _3 = {x: i32}*
+                // _4 = getelementptr {x:i32}, _3, 0, 0          ; _4 = i32*
+                //
+                // _4 gives us the final pointer to the last projected place, the `i32`,
+                // which we can finally copy into the assignee.
+
+                for (const projection of place.projections) {
+                    if (projection.type === 'Deref') todo('deref projections');
+
+                    const oldBase = finalLocal;
+                    const oldTy = finalTy;
+                    finalLocal = `%t.${tempLocal()}`;
+                    if (oldTy.type !== 'Record') {
+                        throw new Error('projection target must be a record type');
+                    }
+                    const oldTyS = llTy(oldTy);
+
+                    const projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
+                    finalTy = normalize(oldTy.fields[projectedIndex][1]);
+                    output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
+                }
+
+                return { finalTy, finalLocal };
             }
 
             let writeBB = (name: string) => output += name + ':\n';
@@ -2085,9 +2225,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     const stmt = block.stmts[j];
                     switch (stmt.type) {
                         case 'Assignment': {
-                            const local = getLocal(stmt.assignee);
+                            const { finalLocal, finalTy } = compilePlaceExpr(stmt.assignee);
                             const valS = compileValueToLocal(stmt.value);
-                            output += `store ${llValTy(mir, stmt.value)} ${valS}, ${llTy(local.ty)}* %l.${stmt.assignee}\n`;
+                            output += `store ${llValTy(mir, stmt.value)} ${valS}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
                         }
                         case 'BinOp': {
@@ -2104,59 +2244,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             break;
                         }
                         case 'Copy': {
-                            const rawBase = mir.locals[stmt.place.base];
-
-                            let finalLocal: string;
-                            let finalTy = normalize(rawBase.ty);
-                            if (rawBase.temporary) {
-                                // This could be e.g.:
-                                //     _ = f().v.x  where f(): {v:{x:i32}}
-                                // 
-                                // _1 = f()
-                                // _2 = copy {base: _1 /* {v:{x:i32}} */, projections: ['v', 'x']}
-                                //
-                                // We generally want to codegen these projections as a series of GEP, which requires a pointer operand
-                                // so we alloca a new variable that we store the base in.
-                                const baseId = `%t.${tempLocal()}`;
-                                output += `${baseId} = alloca ${llTy(finalTy)}\n`;
-                                output += `store ${llTy(finalTy)} %l.${stmt.place.base}, ${llTy(finalTy)}* ${baseId}\n`;
-                                finalLocal = baseId;
-                            } else {
-                                // If it's not a temporary, then the base is most likely a local variable.
-                                // In any case, `temporary = false` means that it must be alloca'd, so there is no need to do the above,
-                                // as we already have a pointer that we can GEP into.
-                                finalLocal = `%l.${stmt.place.base}`;
-                            }
-
-                            // For the above example f().v.x:
-                            //
-                            // ; process base:
-                            // _1 = f(): {v:{x:i32}}
-                            // _2 = alloca {v:{x:i32}}
-                            // store _1 -> _2
-                            //
-                            // ; process projections:
-                            // _3 = getelementptr {v:{x:i32}}, _2, 0, 0      ; _3 = {x: i32}*
-                            // _4 = getelementptr {x:i32}, _3, 0, 0          ; _4 = i32*
-                            //
-                            // _4 gives us the final pointer to the last projected place, the `i32`,
-                            // which we can finally copy into the assignee.
-
-                            for (const projection of stmt.place.projections) {
-                                if (projection.type === 'Deref') todo('deref projections');
-
-                                const oldBase = finalLocal;
-                                const oldTy = finalTy;
-                                finalLocal = `%t.${tempLocal()}`;
-                                if (oldTy.type !== 'Record') {
-                                    throw new Error('projection target must be a record type');
-                                }
-                                const oldTyS = llTy(oldTy);
-
-                                const projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
-                                finalTy = normalize(oldTy.fields[projectedIndex][1]);
-                                output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
-                            }
+                            const { finalLocal, finalTy } = compilePlaceExpr(stmt.place);
 
                             output += `%l.${stmt.assignee} = load ${llTy(finalTy)}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
@@ -2200,6 +2288,15 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${calleeMangled}(${argList})\n`;
                             output += `br label %bb.${terminator.target}\n`;
                             break;
+                        case 'Conditional': {
+                            const condition = compileValueToLocal(terminator.condition);
+                            output += `br i1 ${condition}, label %bb.${terminator.then}, label %bb.${terminator.else}\n`
+                            break;
+                        }
+                        case 'Jump': {
+                            output += `br label %bb.${terminator.target}\n`;
+                            break;
+                        }
                         default: assertUnreachable(terminator)
                     }
                 }
