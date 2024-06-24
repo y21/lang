@@ -1965,11 +1965,26 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
     function instantiateTyVars(ty: Ty): Ty {
         if (!hasTyVid(ty)) return ty;
 
-        const flags = withoutTyVid(ty.flags);
+        const instantiateMany = (tys: Ty[]): { instantiated: Ty[], flags: number } => {
+            let flags = EMPTY_FLAGS;
+            const instantiated: Ty[] = [];
+            for (const ty of tys) {
+                const inst = instantiateTyVars(ty);
+                flags |= inst.flags;
+                instantiated.push(inst);
+            }
+            return { instantiated, flags };
+        }
 
         switch (ty.type) {
-            case 'Alias': return { ...ty, flags, args: ty.args.map(instantiateTyVars) };
-            case 'Array': return { ...ty, flags, elemTy: instantiateTyVars(ty.elemTy) };
+            case 'Alias': {
+                const { flags, instantiated: args } = instantiateMany(ty.args);
+                return { ...ty, flags, args };
+            }
+            case 'Array': {
+                const elemTy = instantiateTyVars(ty.elemTy);
+                return { ...ty, flags: elemTy.flags, elemTy };
+            }
             case 'TyVid':
                 // the constrained type might itself reference other type variables, see tests/later-infer.chg for a full example
                 return instantiateTyVars(infcx.tyVars[ty.id].constrainedTy!);
@@ -1981,10 +1996,24 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             case 'TyParam':
             case 'bool':
             case 'never': return ty;
-            case 'Pointer': return { ...ty, flags, pointee: instantiateTyVars(ty.pointee) };
-            case 'Record':
-                return { ...ty, flags, fields: ty.fields.map(([k, ty]) => [k, instantiateTyVars(ty)]) };
-            case 'Tuple': return { ...ty, flags, elements: ty.elements.map(instantiateTyVars) };
+            case 'Pointer': {
+                const pointee = instantiateTyVars(ty.pointee);
+                return { ...ty, flags: pointee.flags, pointee }
+            };
+            case 'Record': {
+                let flags = EMPTY_FLAGS;
+                const fields: [string, Ty][] = [];
+                for (const [k, v] of ty.fields) {
+                    const inst = instantiateTyVars(v);
+                    flags |= inst.flags;
+                    fields.push([k, inst]);
+                }
+                return { ...ty, flags, fields };
+            }
+            case 'Tuple': {
+                const { flags, instantiated: elements } = instantiateMany(ty.elements);
+                return { ...ty, flags, elements };
+            }
             default: assertUnreachable(ty);
         }
     }
@@ -2285,7 +2314,14 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return pointee;
                 }
                 case 'FnCall': {
-                    const sig = typeck.instantiatedFnSigs.get(expr)!;
+                    function instantiateFnSig(sig: InstantiatedFnSig, args: Ty[]): InstantiatedFnSig {
+                        return {
+                            args: sig.args.map(ty => instantiateTy(ty, args)),
+                            parameters: sig.parameters.map(ty => instantiateTy(ty, args)),
+                            ret: instantiateTy(sig.ret, args)
+                        }
+                    }
+                    const sig = instantiateFnSig(typeck.instantiatedFnSigs.get(expr)!, args);
 
                     // calls to intrinsics are special cased
                     if (expr.callee.type === 'Literal') {
@@ -2506,7 +2542,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     case 'str':
                         const ctId = nextConstId();
                         const ctTy = `[${val.value.length} x i8]`;
-                        constSection += `${ctId} = private constant ${ctTy} c"${val.value}"`;
+                        constSection += `${ctId} = private constant ${ctTy} c"${val.value}"\n`;
                         return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${val.value.length}}`;
                     case 'Unreachable': return 'poison';
                     case 'FnDef':
@@ -2621,9 +2657,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             break;
                         }
                         case 'Deref': {
-                            output += `${finalLocal} = load ${oldTyS}, ${oldTyS}* ${oldBase}`;
+                            output += `${finalLocal} = load ${oldTyS}, ${oldTyS}* ${oldBase}\n`;
                             if (oldTy.type !== 'Pointer') throw new Error('dereferencing non-ptr');
-                            finalTy = oldTy.pointee;
+                            finalTy = normalize(oldTy.pointee);
                             break;
                         }
                     }
