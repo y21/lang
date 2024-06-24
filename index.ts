@@ -314,7 +314,7 @@ type Expr = { span: Span } & (
     | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
     | { type: "Assignment"; target: Expr; value: Expr }
-    | { type: "Property"; target: Expr; property: string }
+    | { type: "Property"; target: Expr; property: string | number }
     | { type: "Return"; value: Expr }
     | { type: "Unary"; op: UnaryOp; rhs: Expr }
     | {
@@ -483,6 +483,13 @@ function parse(src: string): Program {
                 ty = { type: 'Record', fields };
                 break;
             case TokenType.LParen: {
+                i++;
+                if (eatToken(TokenType.RParen, false)) {
+                    // Empty tuple type.
+                    ty = { type: 'Tuple', elements: [] };
+                    break;
+                }
+
                 const tty = parseTy();
                 if (eatToken(TokenType.RParen, false)) {
                     // (<ty>) is not a tuple but rather grouping
@@ -611,6 +618,11 @@ function parse(src: string): Program {
             case TokenType.LParen: {
                 // Either tuple type or grouping, depending on if the expression is followed by a comma
                 const lparenSpan = tokens[i++].span;
+                if (tokens[i].ty === TokenType.RParen) {
+                    i++;
+                    return { type: 'Tuple', elements: [], span: joinSpan(lparenSpan, tokens[i - 1].span) };
+                }
+
                 const first = parseRootExpr();
                 if (eatToken(TokenType.Comma, false)) {
                     const elements = [first];
@@ -695,8 +707,13 @@ function parse(src: string): Program {
                     break;
                 }
                 case TokenType.Dot: {
-                    let ident = expectIdent();
-                    expr = { type: 'Property', target: expr, property: ident, span: [expr.span[0], tokens[i - 1].span[1]] }
+                    let property: string | number;
+                    switch (tokens[i].ty) {
+                        case TokenType.Ident: property = snip(tokens[i++].span); break;
+                        case TokenType.Number: property = +snip(tokens[i++].span); break;
+                        default: throw new Error('property must be a string or number');
+                    }
+                    expr = { type: 'Property', target: expr, property, span: [expr.span[0], tokens[i - 1].span[1]] }
                     break;
                 }
                 case TokenType.Plus:
@@ -1732,14 +1749,24 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 }
                 case 'Property':
                     const target = normalize(typeckExpr(expr.target));
-                    if (target.type !== 'Record') {
-                        throw new Error(`property access requires record type, got ${ppTy(target)}`);
+                    switch (target.type) {
+                        case 'Record':
+                            const field = target.fields.find(([k]) => k === expr.property);
+                            if (!field) {
+                                throw new Error(`field '${expr.property}' not found on type ${ppTy(target)}`);
+                            }
+                            return field[1];
+                        case 'Tuple':
+                            if (typeof expr.property !== 'number') {
+                                throw new Error('field access on tuple must be a number');
+                            }
+                            if (expr.property >= target.elements.length) {
+                                throw new Error(`tried to access field ${expr.property}, but tuple only has ${target.elements.length} elements`);
+                            }
+                            return target.elements[expr.property];
+                        default:
+                            throw new Error(`property access requires record or tuple type, got ${ppTy(target)}`);
                     }
-                    const field = target.fields.find(([k]) => k === expr.property);
-                    if (!field) {
-                        throw new Error(`field '${expr.property}' not found on type ${ppTy(target)}`);
-                    }
-                    return field[1];
                 case 'If':
                     infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
                     typeckExpr(expr.then);
@@ -1834,6 +1861,16 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {
                             subFields(sub, sup);
+                        } else if (sub.type === 'Tuple' && sup.type === 'Tuple') {
+                            if (sub.elements.length !== sup.elements.length) {
+                                error(src, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
+                            } else {
+                                for (let i = 0; i < sub.elements.length; i++) {
+                                    const subf = sub.elements[i];
+                                    const supf = sup.elements[i];
+                                    infcx.constraints.push({ type: 'SubtypeOf', at: constraint.at, cause: constraint.cause, sub: subf, sup: supf });
+                                }
+                            }
                         } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
                             infcx.constraints.push({
                                 type: 'SubtypeOf',
@@ -1989,7 +2026,7 @@ const UNIT_MIR: MirValue = { type: 'Tuple', value: [] };
  */
 type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary: temporary };
 type MirLocalId<temporary extends boolean = boolean> = number;
-type Projection = { type: 'Field', property: string } | { type: 'Deref' };
+type Projection = { type: 'Field', property: string | number } | { type: 'Deref' };
 type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
 type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
@@ -2093,10 +2130,11 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             blocks.push({ stmts: [], terminator: null });
             return blocks.length - 1;
         };
-        const hasDefaultReturn = decl.sig.ret === undefined;
-        if (decl.sig.ret !== undefined) {
+        const retTy = decl.sig.ret && typeck.loweredTys.get(decl.sig.ret)!;
+        const hasSignificantReturn = retTy && !isUnit(retTy);
+        if (hasSignificantReturn) {
             // _0 = return place
-            assert(addLocal(typeck.loweredTys.get(decl.sig.ret)!, false) === 0);
+            assert(addLocal(retTy, false) === 0);
         }
         const returnPlace = locals[0] as MirLocal<false>;
         const returnId = 0 as MirLocalId<false>;
@@ -2155,10 +2193,10 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
         }
 
         function lowerReturnValue(value: MirValue): MirValue {
-            if (hasDefaultReturn) {
+            if (hasSignificantReturn) {
+                block.stmts.push({ type: 'Assignment', assignee: { base: returnId, projections: [] }, value });
                 block.terminator = { type: 'Return' };
             } else {
-                block.stmts.push({ type: 'Assignment', assignee: { base: returnId, projections: [] }, value });
                 block.terminator = { type: 'Return' };
             }
             let newBlock = { stmts: [], terminator: null };
@@ -2359,8 +2397,8 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             lowerStmt(stmt);
         }
 
-        if (decl.sig.ret === undefined) {
-            // append implicit `return ()` statement for default return fns
+        if (!hasSignificantReturn) {
+            // append implicit `ret void` statement for default return fns
             assert(block.terminator === null);
             lowerReturnValue(UNIT_MIR);
         }
@@ -2501,12 +2539,12 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 return mirLocal(mir, id);
             };
 
-            const ret = mir.locals[0].ty;
-            const hasDefaultReturn = decl.sig.ret === undefined;
-
             const parameterList = mir.parameters.map((id) => `${llTy(getLocal(id).ty)} %lt.${id}`).join(', ');
+            const rawRetTy = decl.sig.ret ? typeck.loweredTys.get(decl.sig.ret)! : UNIT;
+            // only "significant" (= non-unit) types get a return place
+            const retTy = !isUnit(rawRetTy) ? mir.locals[0].ty : UNIT;
 
-            let output = `define ${hasDefaultReturn ? 'void' : llTy(ret)} @${mangledName}(${parameterList}) {\n`;
+            let output = `define ${isUnit(retTy) ? 'void' : llTy(retTy)} @${mangledName}(${parameterList}) {\n`;
 
             function compileValueToLocal(val: MirValue): string {
                 switch (val.type) {
@@ -2609,13 +2647,24 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                     const oldBase = finalLocal;
                     const oldTy = finalTy;
                     finalLocal = `%t.${tempLocal()}`;
-                    if (oldTy.type !== 'Record') {
-                        throw new Error('projection target must be a record type');
+                    let projectedIndex: number;
+                    switch (oldTy.type) {
+                        case 'Record':
+                            projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
+                            finalTy = normalize(oldTy.fields[projectedIndex][1]);
+                            break;
+                        case 'Tuple':
+                            if (typeof projection.property !== 'number') {
+                                throw new Error('non-numeric projection on tuple');
+                            }
+                            projectedIndex = projection.property;
+                            finalTy = normalize(oldTy.elements[projectedIndex]);
+                            break;
+                        default:
+                            throw new Error('projection target must be a record or tuple type');
                     }
                     const oldTyS = llTy(oldTy);
 
-                    const projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
-                    finalTy = normalize(oldTy.fields[projectedIndex][1]);
                     output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
                 }
 
@@ -2723,12 +2772,13 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 if (terminator) {
                     switch (terminator.type) {
                         case 'Return':
-                            if (hasDefaultReturn) {
+                            if (isUnit(retTy)) {
                                 output += 'ret void\n';
                             } else {
+                                const tyS = llTy(retTy);
                                 const temp = tempLocal();
-                                output += `%ret.${temp} = load ${llTy(ret)}, ${llTy(ret)}* %l.0\n`;
-                                output += `ret ${llTy(ret)} %ret.${temp}\n`;
+                                output += `%ret.${temp} = load ${tyS}, ${tyS}* %l.0\n`;
+                                output += `ret ${tyS} %ret.${temp}\n`;
                             }
                             break;
                         case 'Call':
@@ -2747,7 +2797,8 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                         const parameterList = terminator.decl.sig.parameters.map(({ ty }) => {
                                             return llTy(typeck.loweredTys.get(ty)!);
                                         }).join(', ');
-                                        declareSection += `declare ${llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
+
+                                        declareSection += `declare ${isUnit(ret) ? 'void' : llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
                                         _externDeclarations.add(terminator.decl.sig.name);
                                     }
                                     mangledName = terminator.decl.sig.name;
@@ -2757,7 +2808,15 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             }
 
                             const argList = terminator.args.map(arg => `${llValTy(mir, arg)} ${compileValueToLocal(arg)}`).join(', ');
-                            output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${mangledName}(${argList})\n`;
+                            if (isUnit(terminator.sig.ret)) {
+                                // Annoying hack: we generally codegen functions that return unit as `void()*`, however
+                                // we also generally treat ZSTs as equivalent to `{}` and old versions of LLVM error on
+                                // `call {} @fnThatReturnsVoid()`.
+                                // So just bitcast void()* to {}()*
+                                output += `%l.${terminator.assignee} = call {} bitcast(void()* @${mangledName} to {}()*)(${argList})\n`;
+                            } else {
+                                output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${mangledName}(${argList})\n`;
+                            }
                             output += `br label %bb.${terminator.target}\n`;
                             break;
                         case 'Conditional': {

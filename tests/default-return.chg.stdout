@@ -22,7 +22,7 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.0 = call {} @foo()
+%l.0 = call {} bitcast(void()* @foo to {}()*)()
 br label %bb.1
 
 bb.1:

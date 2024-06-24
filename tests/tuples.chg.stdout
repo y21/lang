@@ -1,0 +1,152 @@
+expr @ 1:9 2:0 => ()
+expr @ 2:13 3:0 => ()
+expr @ 3:26 3:28 => ()
+expr @ 3:25 3:30 => (())
+expr @ 3:18 3:30 => never
+expr @ 3:16 4:0 => ()
+expr @ 4:28 4:30 => ()
+expr @ 4:31 4:33 => ()
+expr @ 4:27 4:34 => ((), ())
+expr @ 4:20 4:34 => never
+expr @ 4:18 5:0 => ()
+expr @ 5:32 5:34 => ()
+expr @ 5:35 5:37 => i32
+expr @ 5:38 5:40 => ()
+expr @ 5:31 5:41 => ((), i32, ())
+expr @ 5:24 5:41 => never
+expr @ 5:22 6:0 => ()
+expr @ 8:5 8:7 => fn t1(...)
+expr @ 8:5 8:9 => ()
+expr @ 8:11 8:13 => fn t2(...)
+expr @ 8:11 8:15 => ()
+expr @ 8:17 8:19 => fn t3(...)
+expr @ 8:17 8:21 => (())
+expr @ 8:23 8:25 => fn t4(...)
+expr @ 8:23 8:27 => ((), ())
+expr @ 9:12 9:14 => fn t5(...)
+expr @ 9:12 9:16 => ((), i32, ())
+expr @ 9:12 9:18 => i32
+expr @ 9:5 9:18 => never
+expr @ 7:16 11:1 => ()
+
+
+
+define void @t1() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @t2() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define {{}} @t3() {
+prologue:
+%l.0 = alloca {{}}
+br label %bb.0
+
+bb.0:
+%t.2 = alloca {}
+%t.3 = load {}, {}* %t.2
+%t.0 = alloca {{}}
+%p.1 = getelementptr {{}}, {{}}* %t.0, i32 0, i32 0
+store {} %t.3, {}* %p.1
+%t.4 = load {{}}, {{}}* %t.0
+store {{}} %t.4, {{}}* %l.0
+%ret.5 = load {{}}, {{}}* %l.0
+ret {{}} %ret.5
+
+}
+
+define {{}, {}} @t4() {
+prologue:
+%l.0 = alloca {{}, {}}
+br label %bb.0
+
+bb.0:
+%t.2 = alloca {}
+%t.3 = load {}, {}* %t.2
+%t.5 = alloca {}
+%t.6 = load {}, {}* %t.5
+%t.0 = alloca {{}, {}}
+%p.1 = getelementptr {{}, {}}, {{}, {}}* %t.0, i32 0, i32 0
+store {} %t.3, {}* %p.1
+%p.4 = getelementptr {{}, {}}, {{}, {}}* %t.0, i32 0, i32 1
+store {} %t.6, {}* %p.4
+%t.7 = load {{}, {}}, {{}, {}}* %t.0
+store {{}, {}} %t.7, {{}, {}}* %l.0
+%ret.8 = load {{}, {}}, {{}, {}}* %l.0
+ret {{}, {}} %ret.8
+
+}
+
+define {{}, i32, {}} @t5() {
+prologue:
+%l.0 = alloca {{}, i32, {}}
+br label %bb.0
+
+bb.0:
+%t.2 = alloca {}
+%t.3 = load {}, {}* %t.2
+%t.6 = alloca {}
+%t.7 = load {}, {}* %t.6
+%t.0 = alloca {{}, i32, {}}
+%p.1 = getelementptr {{}, i32, {}}, {{}, i32, {}}* %t.0, i32 0, i32 0
+store {} %t.3, {}* %p.1
+%p.4 = getelementptr {{}, i32, {}}, {{}, i32, {}}* %t.0, i32 0, i32 1
+store i32 42, i32* %p.4
+%p.5 = getelementptr {{}, i32, {}}, {{}, i32, {}}* %t.0, i32 0, i32 2
+store {} %t.7, {}* %p.5
+%t.8 = load {{}, i32, {}}, {{}, i32, {}}* %t.0
+store {{}, i32, {}} %t.8, {{}, i32, {}}* %l.0
+%ret.9 = load {{}, i32, {}}, {{}, i32, {}}* %l.0
+ret {{}, i32, {}} %ret.9
+
+}
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+%l.1 = call {} bitcast(void()* @t1 to {}()*)()
+br label %bb.1
+
+bb.1:
+%l.2 = call {} bitcast(void()* @t2 to {}()*)()
+br label %bb.2
+
+bb.2:
+%l.3 = call {{}} @t3()
+br label %bb.3
+
+bb.3:
+%l.4 = call {{}, {}} @t4()
+br label %bb.4
+
+bb.4:
+%l.5 = call {{}, i32, {}} @t5()
+br label %bb.5
+
+bb.5:
+%t.0 = alloca {{}, i32, {}}
+store {{}, i32, {}} %l.5, {{}, i32, {}}* %t.0
+%t.1 = getelementptr {{}, i32, {}}, {{}, i32, {}}* %t.0, i32 0, i32 1
+%l.6 = load i32, i32* %t.1
+store i32 %l.6, i32* %l.0
+%ret.2 = load i32, i32* %l.0
+ret i32 %ret.2
+
+}
+
+
