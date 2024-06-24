@@ -1,0 +1,55 @@
+
+extern "intrinsic" fn bitcast<T, U>(v: T): U;
+
+extern "C" fn write(fd: i32, buf: i8*, size: u64): i32;
+extern "C" fn malloc(size: u64): ()*;
+extern "C" fn abort();
+extern "C" fn realloc(ptr: ()*, size: u64): ()*;
+
+type StrRepr = { ptr: i8*,len: u64 };
+
+fn str_repr(s: str*): StrRepr {
+  return bitcast(s);
+}
+
+fn print(s: str*) {
+  let parts = str_repr(s);
+  write(1, parts.ptr, parts.len);
+}
+
+type Vec<T> constructible(mk_vec) = { ptr: T*, len: u64, cap: u64 };
+
+fn mk_vec<T>(): Vec<T> {
+  return .{ ptr: bitcast(0), len: 0u64, cap: 0u64 };
+}
+
+fn at<T>(vec: Vec<T>*, index: u64): T* {
+  if index >= (*vec).len {
+    print("index out of bounds");
+    abort();
+  };
+  return bitcast::<u64, T*>(bitcast::<T*, u64>((*vec).ptr) + index);
+}
+
+fn push<T>(vec: Vec<T>*, value: T) {
+  if bitcast((*vec).ptr) == 0 {
+    (*vec).ptr = bitcast::<()*, T*>(malloc(4u64));
+    (*vec).cap = 4u64;
+  };
+
+  if (*vec).len == (*vec).cap {
+    (*vec).cap = (*vec).cap * 2u64;
+    (*vec).ptr = bitcast::<()*, T*>(realloc(bitcast::<T*, ()*>((*vec).ptr), (*vec).cap));
+  };
+
+  let ptr = bitcast::<u64, T*>(bitcast::<T*, u64>((*vec).ptr) + (*vec).len);
+  *ptr = value;
+  (*vec).len = (*vec).len + 1u64;
+}
+
+
+fn main() {
+  let vec = mk_vec::<i8>();
+  push(&vec, 45i8);
+  at(&vec, 0u64);
+}
