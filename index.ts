@@ -605,7 +605,8 @@ function parse(src: string): Program {
             case TokenType.Return: {
                 let returnKwSpan = tokens[i++].span;
                 const value = parseRootExpr();
-                return { type: 'Return', span: joinSpan(returnKwSpan, value.span), value };
+                expr = { type: 'Return', span: joinSpan(returnKwSpan, value.span), value };
+                break;
             }
             case TokenType.LBrace: {
                 const lbraceSpan = tokens[i++].span;
@@ -613,14 +614,16 @@ function parse(src: string): Program {
                 while (!eatToken(TokenType.RBrace, false)) {
                     stmts.push(parseStmt());
                 }
-                return { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
+                expr = { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
+                break;
             }
             case TokenType.LParen: {
                 // Either tuple type or grouping, depending on if the expression is followed by a comma
                 const lparenSpan = tokens[i++].span;
                 if (tokens[i].ty === TokenType.RParen) {
                     i++;
-                    return { type: 'Tuple', elements: [], span: joinSpan(lparenSpan, tokens[i - 1].span) };
+                    expr = { type: 'Tuple', elements: [], span: joinSpan(lparenSpan, tokens[i - 1].span) };
+                    break;
                 }
 
                 const first = parseRootExpr();
@@ -632,24 +635,27 @@ function parse(src: string): Program {
                         }
                         elements.push(parseRootExpr());
                     }
-                    return { type: 'Tuple', elements, span: joinSpan(lparenSpan, tokens[i - 1].span) };
+                    expr = { type: 'Tuple', elements, span: joinSpan(lparenSpan, tokens[i - 1].span) };
                 } else {
                     eatToken(TokenType.RParen);
-                    return first;
+                    expr = first;
                 }
+                break;
             }
             case TokenType.If: {
                 const ifSpan = tokens[i++].span;
                 const condition = parseRootExpr();
                 const body = parseBlockExpr();
                 // TODO: else
-                return { type: 'If', condition, then: body, else: null, span: joinSpan(ifSpan, tokens[i - 1].span) };
+                expr = { type: 'If', condition, then: body, else: null, span: joinSpan(ifSpan, tokens[i - 1].span) };
+                break;
             }
             case TokenType.While: {
                 const whileSpan = tokens[i++].span;
                 const condition = parseRootExpr();
                 const body = parseBlockExpr();
-                return { type: 'While', body, condition, span: joinSpan(whileSpan, tokens[i - 1].span) };
+                expr = { type: 'While', body, condition, span: joinSpan(whileSpan, tokens[i - 1].span) };
+                break;
             }
             case TokenType.And: {
                 // Unary &
@@ -2032,7 +2038,7 @@ type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
     | { type: 'Unary', op: UnaryOp, assignee: MirLocalId<true>, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
-    | { type: 'AddrOfLocal', assignee: MirLocalId<true>, local: MirLocalId<false> }
+    | { type: 'AddrOf', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
 type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
@@ -2245,19 +2251,13 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return { type: 'Local', value: res };
                 }
                 case 'AddrOf': {
-                    switch (expr.pointee.type) {
-                        case 'Literal':
-                            const lres = res.valueResolutions.get(expr.pointee);
-                            if (lres?.type === 'LetDecl') {
-                                const res = addLocal(typeck.exprTys.get(expr.pointee)!, true);
-                                block.stmts.push({ type: 'AddrOfLocal', assignee: res, local: astLocalToMirLocal.get(lres)! });
-                                return { type: 'Local', value: res };
-                            } else {
-                                throw new Error(`cannot take address of non-local variable`);
-                            }
-                        // TODO: we can const-promote number literals
-                        default: throw new Error(`cannot take address of ${expr.pointee.type}`);
+                    const pointee = lowerExpr(expr.pointee);
+                    if (pointee.type !== 'Place') {
+                        throw new Error('borrowed expression must be a place');
                     }
+                    const res = addLocal(typeck.exprTys.get(expr)!, true);
+                    block.stmts.push({ type: 'AddrOf', assignee: res, place: pointee });
+                    return { type: 'Local', value: res };
                 }
                 case 'Assignment': {
                     let assignee = lowerExpr(expr.target);
@@ -2478,62 +2478,12 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
         }
     }
 
-    function renameAliases(mir: MirBody) {
-        const aliasGraph = new Map<MirLocalId, MirLocalId>();
-        function processStmtOrTerm(s: MirStmt | MirTerminator) {
-            function patchObjKey<K extends string>(o: Record<K, MirLocalId>, p: K) {
-                while (aliasGraph.has(o[p])) {
-                    o[p] = aliasGraph.get(o[p])!;
-                }
-            }
-            function patchValue(val: MirValue) {
-                if (val.type === 'Local') patchObjKey(val, 'value');
-            }
-            switch (s.type) {
-                case 'AddrOfLocal': aliasGraph.set(s.assignee, s.local); break;
-                case 'Assignment': patchObjKey(s.assignee, 'base'); patchValue(s.value); break;
-                case 'BinOp':
-                    patchObjKey(s, 'assignee');
-                    patchValue(s.lhs);
-                    patchValue(s.rhs);
-                    break;
-                case 'Unary':
-                    patchObjKey(s, 'assignee');
-                    patchValue(s.rhs);
-                    break;
-                case 'Copy':
-                    patchObjKey(s, 'assignee');
-                    patchObjKey(s.place, 'base');
-                    break;
-                case 'Return':
-                    break;
-                case 'Call':
-                    s.args.forEach(patchValue);
-                    break;
-                case 'Bitcast':
-                    patchObjKey(s, 'assignee');
-                    patchValue(s.value);
-                    break;
-                case 'Conditional':
-                    patchValue(s.condition);
-                    break;
-                case 'Jump': break;
-                default: assertUnreachable(s);
-            }
-        }
-        for (const block of mir.blocks) {
-            for (const stmt of block.stmts) processStmtOrTerm(stmt);
-            if (block.terminator) processStmtOrTerm(block.terminator);
-        }
-    }
-
     function codegenFn(decl: FnDecl, args: Ty[]) {
         function inner(decl: FnDecl, args: Ty[]) {
 
             let _temps = 0;
             let tempLocal = () => _temps++;
             const mir = astToMir(src, mangledName, decl, args, res, typeck);
-            renameAliases(mir);
 
             const getLocal = <temporary extends boolean>(id: MirLocalId<temporary>): MirLocal<temporary> => {
                 return mirLocal(mir, id);
@@ -2642,30 +2592,39 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 // which we can finally copy into the assignee.
 
                 for (const projection of place.projections) {
-                    if (projection.type === 'Deref') todo('deref projections');
-
                     const oldBase = finalLocal;
                     const oldTy = finalTy;
-                    finalLocal = `%t.${tempLocal()}`;
-                    let projectedIndex: number;
-                    switch (oldTy.type) {
-                        case 'Record':
-                            projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
-                            finalTy = normalize(oldTy.fields[projectedIndex][1]);
-                            break;
-                        case 'Tuple':
-                            if (typeof projection.property !== 'number') {
-                                throw new Error('non-numeric projection on tuple');
-                            }
-                            projectedIndex = projection.property;
-                            finalTy = normalize(oldTy.elements[projectedIndex]);
-                            break;
-                        default:
-                            throw new Error('projection target must be a record or tuple type');
-                    }
                     const oldTyS = llTy(oldTy);
+                    finalLocal = `%t.${tempLocal()}`;
+                    switch (projection.type) {
+                        case 'Field': {
+                            let projectedIndex: number;
+                            switch (oldTy.type) {
+                                case 'Record':
+                                    projectedIndex = oldTy.fields.findIndex(v => v[0] === projection.property);
+                                    finalTy = normalize(oldTy.fields[projectedIndex][1]);
+                                    break;
+                                case 'Tuple':
+                                    if (typeof projection.property !== 'number') {
+                                        throw new Error('non-numeric projection on tuple');
+                                    }
+                                    projectedIndex = projection.property;
+                                    finalTy = normalize(oldTy.elements[projectedIndex]);
+                                    break;
+                                default:
+                                    throw new Error('projection target must be a record or tuple type');
+                            }
 
-                    output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
+                            output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
+                            break;
+                        }
+                        case 'Deref': {
+                            output += `${finalLocal} = load ${oldTyS}, ${oldTyS}* ${oldBase}`;
+                            if (oldTy.type !== 'Pointer') throw new Error('dereferencing non-ptr');
+                            finalTy = oldTy.pointee;
+                            break;
+                        }
+                    }
                 }
 
                 return { finalTy, finalLocal };
@@ -2736,7 +2695,13 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `%l.${stmt.assignee} = load ${llTy(finalTy)}, ${llTy(finalTy)}* ${finalLocal}\n`;
                             break;
                         }
-                        case 'AddrOfLocal': break; // Handled in `renameAliases`
+                        case 'AddrOf': {
+                            const { finalLocal, finalTy } = compilePlaceExpr(stmt.place);
+                            // Since we already compile place expressions to GEPs and `finalLocal` already is the pointer that we need,
+                            // simply emit an identity bitcast
+                            output += `%l.${stmt.assignee} = bitcast ${llTy(finalTy)}* ${finalLocal} to ${llTy(finalTy)}*\n`;
+                            break;
+                        }
                         case 'Bitcast':
                             // compile bitcast<i64, i8*>(0) to
                             //

@@ -1,0 +1,6 @@
+fn main(): i32 {
+    let x = (1,);
+    let y = ((&x,),&x);
+    let z = (&y, &x);
+    return (*(*z.0).0.0).0 + (*z.1).0;
+}
