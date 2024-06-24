@@ -2,20 +2,3 @@
 
     return foo();
            ^^^^^  type error: unconstrained type variable created here
-
-    switch (ty.type) {
-               ^
-
-TypeError: Cannot read properties of null (reading 'type')
-
-
-
-
-
-
-
-
-    
-    
-
-

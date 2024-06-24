@@ -172,7 +172,7 @@ function isDigit(c: string) {
 }
 
 function isAlpha(c: string) {
-    return isAlphaStart(c) || isDigit(c);
+    return isAlphaStart(c) || isDigit(c) || c === '_';
 }
 
 function tokenize(src: string): Token[] {
@@ -330,9 +330,6 @@ type Expr = { span: Span } & (
     | { type: "While"; condition: Expr; body: Expr }
     | { type: "Tuple", elements: Expr[] }
 );
-
-
-
 
 type LetDecl = { type: 'LetDecl', name: string, init: Expr };
 
@@ -1973,7 +1970,9 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
         switch (ty.type) {
             case 'Alias': return { ...ty, flags, args: ty.args.map(instantiateTyVars) };
             case 'Array': return { ...ty, flags, elemTy: instantiateTyVars(ty.elemTy) };
-            case 'TyVid': return infcx.tyVars[ty.id].constrainedTy!;
+            case 'TyVid':
+                // the constrained type might itself reference other type variables, see tests/later-infer.chg for a full example
+                return instantiateTyVars(infcx.tyVars[ty.id].constrainedTy!);
             case 'FnDef':
             case 'ExternFnDef':
                 throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
@@ -2009,7 +2008,10 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             infcx.exprTys.set(expr, instantiated);
         }
     }
-    for (const stmt of ast.stmts) forEachExprInStmt(stmt, writebackExpr);
+    if (!lub.hadErrors) {
+        // Writeback assumes there were no errors and all ty vars were fully constrained, which may not be the case with errors
+        for (const stmt of ast.stmts) forEachExprInStmt(stmt, writebackExpr);
+    }
 
     return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
 }
@@ -2121,7 +2123,7 @@ function mangleInstFn(decl: FnDecl, args: Ty[]): string {
  * calling `astToMir(f, [i32])` will create the MIR body for `function f(v: i32)`, and cache it.
  */
 const _mirBodyCache = new Map<string, MirBody>();
-function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], res: Resolutions, typeck: TypeckResults): MirBody {
+function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], resolutions: Resolutions, typeck: TypeckResults): MirBody {
     function lowerMir(): MirBody {
         if (decl.body.type !== 'Block') throw `${decl.sig.name} did not have a block as its body?`;
 
@@ -2216,7 +2218,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
                 case 'String': return { type: 'str', value: expr.value };
                 case 'Literal': {
-                    const resolution = res.valueResolutions.get(expr)!;
+                    const resolution = resolutions.valueResolutions.get(expr)!;
                     switch (resolution.type) {
                         case 'FnDecl': {
                             return {
@@ -2747,6 +2749,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             }
                             break;
                         case 'Call':
+                            const parameterList = terminator.sig.parameters.map((ty) => llTy(ty)).join(', ');
                             let mangledName: string;
                             switch (terminator.decl.type) {
                                 case 'FnDecl': {
@@ -2759,9 +2762,6 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 case 'ExternFnDecl': {
                                     if (!_externDeclarations.has(terminator.decl.sig.name)) {
                                         const ret = returnTy(terminator.decl.sig, typeck)!;
-                                        const parameterList = terminator.decl.sig.parameters.map(({ ty }) => {
-                                            return llTy(typeck.loweredTys.get(ty)!);
-                                        }).join(', ');
 
                                         declareSection += `declare ${isUnit(ret) ? 'void' : llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
                                         _externDeclarations.add(terminator.decl.sig.name);
@@ -2778,7 +2778,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 // we also generally treat ZSTs as equivalent to `{}` and old versions of LLVM error on
                                 // `call {} @fnThatReturnsVoid()`.
                                 // So just bitcast void()* to {}()*
-                                output += `%l.${terminator.assignee} = call {} bitcast(void()* @${mangledName} to {}()*)(${argList})\n`;
+                                output += `%l.${terminator.assignee} = call {} bitcast(void(${parameterList})* @${mangledName} to {}(${parameterList})*)(${argList})\n`;
                             } else {
                                 output += `%l.${terminator.assignee} = call ${llTy(terminator.sig.ret)} @${mangledName}(${argList})\n`;
                             }
@@ -2826,26 +2826,30 @@ function timed<T>(what: string, f: () => T): T {
     }
 }
 
-const src = fs.readFileSync(options.path, 'utf8');
-const ast = timed('parse', () => parse(src));
-const resolutions = timed('name res', () => computeResolutions(ast));
-const tyres = timed('typeck', () => typeck(src, ast, resolutions));
-if (options.verbose) {
-    tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(src, k.span)} => ${ppTy(v)}`));
-    console.log();
-}
-const llir = timed('llir/mir codegen', () => codegen(src, ast, resolutions, tyres));
+(function () {
+    const src = fs.readFileSync(options.path, 'utf8');
+    const ast = timed('parse', () => parse(src));
+    const resolutions = timed('name res', () => computeResolutions(ast));
+    const tyres = timed('typeck', () => typeck(src, ast, resolutions));
+    if (options.verbose) {
+        tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(src, k.span)} => ${ppTy(v)}`));
+        console.log();
+    }
+    if (tyres.hadErrors) {
+        return;
+    }
+    const llir = timed('llir/mir codegen', () => codegen(src, ast, resolutions, tyres));
 
-if (options.printLlirOnly) {
-    console.log(llir);
-} else {
-    const llpath = `/tmp/tmpir${Date.now()}.ll`;
-    fs.writeFileSync(llpath, llir);
-    // TODO: don't use -Wno-override-module
-    timed('clang', () => cProcess.spawnSync(`clang ${options.optLevel} -Wno-override-module ${llpath}`, {
-        shell: true,
-        stdio: 'inherit'
-    }));
-    fs.unlinkSync(llpath);
-}
-
+    if (options.printLlirOnly) {
+        console.log(llir);
+    } else {
+        const llpath = `/tmp/tmpir${Date.now()}.ll`;
+        fs.writeFileSync(llpath, llir);
+        // TODO: don't use -Wno-override-module
+        timed('clang', () => cProcess.spawnSync(`clang ${options.optLevel} -Wno-override-module ${llpath}`, {
+            shell: true,
+            stdio: 'inherit'
+        }));
+        fs.unlinkSync(llpath);
+    }
+})();

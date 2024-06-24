@@ -1,0 +1,46 @@
+expr @ 3:22 4:0 => ()
+expr @ 5:11 5:18 => extern "intrinsic" fn bitcast(...)
+expr @ 5:19 5:20 => u64
+expr @ 5:11 5:24 => i32*
+expr @ 6:3 6:4 => fn f(...)
+expr @ 6:5 6:6 => i32
+expr @ 6:8 6:9 => i32*
+expr @ 6:3 6:10 => ()
+expr @ 4:11 8:1 => ()
+
+
+
+define void @f$LT$i32$GT$(i32 %lt.0, i32* %lt.1) {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca i32*
+store i32 %lt.0, i32* %l.0
+store i32* %lt.1, i32** %l.1
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @main() {
+prologue:
+%l.0 = alloca i32*
+br label %bb.0
+
+bb.0:
+%t.0 = alloca i64
+store i64 0, i64* %t.0
+%t.1 = bitcast i64* %t.0 to i32**
+%l.1 = load i32*, i32** %t.1
+store i32* %l.1, i32** %l.0
+%l.3 = load i32*, i32** %l.0
+%l.2 = call {} bitcast(void(i32, i32*)* @f$LT$i32$GT$ to {}(i32, i32*)*)(i32 1, i32* %l.3)
+br label %bb.1
+
+bb.1:
+ret void
+
+}
+
+

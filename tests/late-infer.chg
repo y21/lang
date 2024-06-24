@@ -1,0 +1,7 @@
+extern "intrinsic" fn bitcast<T, U>(v: T): U;
+
+fn f<T>(x: T, y: T*) {}
+fn main() {
+  let z = bitcast(0u64);
+  f(1, z);
+}
