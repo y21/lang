@@ -543,7 +543,7 @@ function parse(src: string): Program {
                 let fullSnip = snip(tokens[i].span);
                 let foundSuffix = suffixes.find((suffix) => fullSnip.endsWith(suffix[0]));
                 if (foundSuffix) {
-                    const unsuffixSpan: Span = [tokens[i].span[0], tokens[i].span[1] - foundSuffix.length - 1]
+                    const unsuffixSpan: Span = [tokens[i].span[0], tokens[i].span[1] - foundSuffix[0].length]
                     const unsuffixSnip = +snip(unsuffixSpan);
                     if (!Number.isInteger(unsuffixSnip)) {
                         throw new Error(`${unsuffixSnip} is not an integer`);
@@ -2207,6 +2207,17 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                 return val;
             }
         }
+        function requireAsPlace(val: ({ type: 'Place' } & MirPlace<boolean>) | MirValue): { type: 'Place' } & MirPlace<boolean> {
+            let place = val.type === 'Local'
+                ? { type: 'Place', base: val.value, projections: [] } as ({ type: 'Place' } & MirPlace<boolean>)
+                : val;
+
+            if (place.type === 'Place') {
+                return place;
+            } else {
+                throw new Error(`place was expected, got ${place.type}`);
+            }
+        }
 
         function lowerStmt(stmt: Stmt) {
             switch (stmt.type) {
@@ -2282,21 +2293,14 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return { type: 'Local', value: res };
                 }
                 case 'AddrOf': {
-                    const pointee = lowerExpr(expr.pointee);
-                    if (pointee.type !== 'Place') {
-                        throw new Error('borrowed expression must be a place');
-                    }
+                    const pointee = requireAsPlace(lowerExpr(expr.pointee));
                     const res = addLocal(typeck.exprTys.get(expr)!, true);
                     block.stmts.push({ type: 'AddrOf', assignee: res, place: pointee });
                     return { type: 'Local', value: res };
                 }
                 case 'Assignment': {
-                    let assignee = lowerExpr(expr.target);
-                    if (assignee.type === 'Local') assignee = { type: 'Place', base: assignee.value, projections: [] };
+                    let assignee = requireAsPlace(lowerExpr(expr.target));
 
-                    if (assignee.type !== 'Place') {
-                        throw new Error('assignment LHS must be a place expression');
-                    }
                     const value = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
                     block.stmts.push({
                         type: 'Assignment',
@@ -2306,10 +2310,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return UNIT_MIR;
                 }
                 case 'Deref': {
-                    const pointee = lowerExpr(expr.pointee);
-                    if (pointee.type !== 'Place') {
-                        throw new Error('deref pointee must be a place');
-                    }
+                    let pointee = requireAsPlace(lowerExpr(expr.pointee));
                     pointee.projections.push({ type: 'Deref' });
                     return pointee;
                 }

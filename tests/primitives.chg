@@ -4,6 +4,7 @@ fn t3(): u32 { return 4294967296u32; }
 fn t4(): u64 { return 18446744073709551615u64; }
 
 fn t5(): i8 { return 127i8; }
+fn t55(): i8 { return 5i8; }
 fn t6(): i16 { return 32767i16; }
 fn t7(): i32 { return 2147483647i32; }
 fn t8(): i64 { return 9223372036854775807i64; }
@@ -12,6 +13,6 @@ fn t9(): bool { return true; }
 fn t10(): bool { return false; }
 
 fn main(): i32 {
-    t1(); t2(); t3(); t4(); t5(); t6(); t7(); t8(); t9(); t10();
+    t1(); t2(); t3(); t4(); t5(); t55(); t6(); t7(); t8(); t9(); t10();
     return 1;
 }

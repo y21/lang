@@ -132,7 +132,7 @@ expr @ 52:24 52:27 => Vec<i8>
 expr @ 53:3 53:7 => fn push(...)
 expr @ 53:9 53:12 => Vec<i8>
 expr @ 53:8 53:12 => Vec<i8>*
-expr @ 53:14 53:15 => i8
+expr @ 53:14 53:16 => i8
 expr @ 53:3 53:19 => ()
 expr @ 54:3 54:5 => fn at(...)
 expr @ 54:7 54:10 => Vec<i8>
@@ -386,7 +386,7 @@ br label %bb.1
 bb.1:
 store {i8*, i64, i64} %l.1, {i8*, i64, i64}* %l.0
 %l.3 = bitcast {i8*, i64, i64}* %l.0 to {i8*, i64, i64}*
-%l.2 = call {} bitcast(void({i8*, i64, i64}*, i8)* @push$LT$i8$GT$ to {}({i8*, i64, i64}*, i8)*)({i8*, i64, i64}* %l.3, i8 4)
+%l.2 = call {} bitcast(void({i8*, i64, i64}*, i8)* @push$LT$i8$GT$ to {}({i8*, i64, i64}*, i8)*)({i8*, i64, i64}* %l.3, i8 45)
 br label %bb.2
 
 bb.2:

@@ -1,5 +1,5 @@
-expr @ 1:22 1:24 => u8
-expr @ 1:15 1:24 => never
+expr @ 1:22 1:25 => u8
+expr @ 1:15 1:25 => never
 expr @ 1:13 2:0 => ()
 expr @ 2:23 2:28 => u16
 expr @ 2:16 2:28 => never
@@ -10,47 +10,52 @@ expr @ 3:14 4:0 => ()
 expr @ 4:23 4:43 => u64
 expr @ 4:16 4:43 => never
 expr @ 4:14 5:0 => ()
-expr @ 6:22 6:24 => i8
-expr @ 6:15 6:24 => never
+expr @ 6:22 6:25 => i8
+expr @ 6:15 6:25 => never
 expr @ 6:13 7:0 => ()
-expr @ 7:23 7:28 => i16
-expr @ 7:16 7:28 => never
+expr @ 7:23 7:24 => i8
+expr @ 7:16 7:24 => never
 expr @ 7:14 8:0 => ()
-expr @ 8:23 8:33 => i32
-expr @ 8:16 8:33 => never
+expr @ 8:23 8:28 => i16
+expr @ 8:16 8:28 => never
 expr @ 8:14 9:0 => ()
-expr @ 9:23 9:42 => i64
-expr @ 9:16 9:42 => never
+expr @ 9:23 9:33 => i32
+expr @ 9:16 9:33 => never
 expr @ 9:14 10:0 => ()
-expr @ 11:24 11:28 => bool
-expr @ 11:17 11:28 => never
-expr @ 11:15 12:0 => ()
-expr @ 12:25 12:30 => bool
-expr @ 12:18 12:30 => never
-expr @ 12:16 13:0 => ()
-expr @ 15:5 15:7 => fn t1(...)
-expr @ 15:5 15:9 => u8
-expr @ 15:11 15:13 => fn t2(...)
-expr @ 15:11 15:15 => u16
-expr @ 15:17 15:19 => fn t3(...)
-expr @ 15:17 15:21 => u32
-expr @ 15:23 15:25 => fn t4(...)
-expr @ 15:23 15:27 => u64
-expr @ 15:29 15:31 => fn t5(...)
-expr @ 15:29 15:33 => i8
-expr @ 15:35 15:37 => fn t6(...)
-expr @ 15:35 15:39 => i16
-expr @ 15:41 15:43 => fn t7(...)
-expr @ 15:41 15:45 => i32
-expr @ 15:47 15:49 => fn t8(...)
-expr @ 15:47 15:51 => i64
-expr @ 15:53 15:55 => fn t9(...)
-expr @ 15:53 15:57 => bool
-expr @ 15:59 15:62 => fn t10(...)
-expr @ 15:59 15:64 => bool
-expr @ 16:12 16:13 => i32
-expr @ 16:5 16:13 => never
-expr @ 14:16 18:1 => ()
+expr @ 10:23 10:42 => i64
+expr @ 10:16 10:42 => never
+expr @ 10:14 11:0 => ()
+expr @ 12:24 12:28 => bool
+expr @ 12:17 12:28 => never
+expr @ 12:15 13:0 => ()
+expr @ 13:25 13:30 => bool
+expr @ 13:18 13:30 => never
+expr @ 13:16 14:0 => ()
+expr @ 16:5 16:7 => fn t1(...)
+expr @ 16:5 16:9 => u8
+expr @ 16:11 16:13 => fn t2(...)
+expr @ 16:11 16:15 => u16
+expr @ 16:17 16:19 => fn t3(...)
+expr @ 16:17 16:21 => u32
+expr @ 16:23 16:25 => fn t4(...)
+expr @ 16:23 16:27 => u64
+expr @ 16:29 16:31 => fn t5(...)
+expr @ 16:29 16:33 => i8
+expr @ 16:35 16:38 => fn t55(...)
+expr @ 16:35 16:40 => i8
+expr @ 16:42 16:44 => fn t6(...)
+expr @ 16:42 16:46 => i16
+expr @ 16:48 16:50 => fn t7(...)
+expr @ 16:48 16:52 => i32
+expr @ 16:54 16:56 => fn t8(...)
+expr @ 16:54 16:58 => i64
+expr @ 16:60 16:62 => fn t9(...)
+expr @ 16:60 16:64 => bool
+expr @ 16:66 16:69 => fn t10(...)
+expr @ 16:66 16:71 => bool
+expr @ 17:12 17:13 => i32
+expr @ 17:5 17:13 => never
+expr @ 15:16 19:1 => ()
 
 
 
@@ -60,7 +65,7 @@ prologue:
 br label %bb.0
 
 bb.0:
-store i8 25, i8* %l.0
+store i8 255, i8* %l.0
 %ret.0 = load i8, i8* %l.0
 ret i8 %ret.0
 
@@ -108,7 +113,19 @@ prologue:
 br label %bb.0
 
 bb.0:
-store i8 12, i8* %l.0
+store i8 127, i8* %l.0
+%ret.0 = load i8, i8* %l.0
+ret i8 %ret.0
+
+}
+
+define i8 @t55() {
+prologue:
+%l.0 = alloca i8
+br label %bb.0
+
+bb.0:
+store i8 5, i8* %l.0
 %ret.0 = load i8, i8* %l.0
 ret i8 %ret.0
 
@@ -200,26 +217,30 @@ bb.4:
 br label %bb.5
 
 bb.5:
-%l.6 = call i16 @t6()
+%l.6 = call i8 @t55()
 br label %bb.6
 
 bb.6:
-%l.7 = call i32 @t7()
+%l.7 = call i16 @t6()
 br label %bb.7
 
 bb.7:
-%l.8 = call i64 @t8()
+%l.8 = call i32 @t7()
 br label %bb.8
 
 bb.8:
-%l.9 = call i1 @t9()
+%l.9 = call i64 @t8()
 br label %bb.9
 
 bb.9:
-%l.10 = call i1 @t10()
+%l.10 = call i1 @t9()
 br label %bb.10
 
 bb.10:
+%l.11 = call i1 @t10()
+br label %bb.11
+
+bb.11:
 store i32 1, i32* %l.0
 %ret.0 = load i32, i32* %l.0
 ret i32 %ret.0
