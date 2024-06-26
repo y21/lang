@@ -149,6 +149,7 @@ enum TokenType {
     Minus,
     Star,
     Slash,
+    Percent,
     Dot,
     Lt,
     Le,
@@ -191,6 +192,7 @@ function tokenize(src: string): Token[] {
             case ']': tokens.push({ span: [start, i + 1], ty: TokenType.RSquare }); break;
             case '{': tokens.push({ span: [start, i + 1], ty: TokenType.LBrace }); break;
             case '}': tokens.push({ span: [start, i + 1], ty: TokenType.RBrace }); break;
+            case '%': tokens.push({ span: [start, i + 1], ty: TokenType.Percent }); break;
             case ':': tokens.push({ span: [start, i + 1], ty: TokenType.Colon }); break;
             case '!':
                 if (src[i + 1] === '=') {
@@ -235,8 +237,7 @@ function tokenize(src: string): Token[] {
                 if (src[i + 1] === '/') {
                     while (i < src.length && src[i] !== '\n') i++;
                 } else {
-                    i++;
-                    tokens.push({ span: [start, i], ty: TokenType.Slash }); break;
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Slash }); break;
                 }
                 break;
             }
@@ -300,7 +301,8 @@ type BinaryOp =
     | TokenType.Lt
     | TokenType.Le
     | TokenType.Gt
-    | TokenType.Ge;
+    | TokenType.Ge
+    | TokenType.Percent;
 
 type UnaryOp = TokenType.Not;
 
@@ -391,6 +393,7 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     // Multiplicative
     [TokenType.Star]: 12,
     [TokenType.Slash]: 12,
+    [TokenType.Percent]: 12,
     // Additive
     [TokenType.Plus]: 11,
     [TokenType.Minus]: 11,
@@ -412,6 +415,7 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.Minus]: 'ltr',
     [TokenType.Star]: 'ltr',
     [TokenType.Slash]: 'ltr',
+    [TokenType.Percent]: 'ltr',
     [TokenType.Not]: 'ltr',
     [TokenType.Lt]: 'ltr',
     [TokenType.Le]: 'ltr',
@@ -728,7 +732,8 @@ function parse(src: string): Program {
                 case TokenType.Le:
                 case TokenType.Gt:
                 case TokenType.Ge:
-                case TokenType.Slash: {
+                case TokenType.Slash:
+                case TokenType.Percent: {
                     const rhs = parseExpr(prec);
                     expr = { type: 'Binary', op: op.ty, lhs: expr, rhs, span: joinSpan(expr.span, rhs.span) };
                     break;
@@ -1656,6 +1661,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         case TokenType.Minus:
                         case TokenType.Star:
                         case TokenType.Slash:
+                        case TokenType.Percent:
                             expectedLhsTy = rhsTy;
                             expectedRhsTy = lhsTy;
                             resultTy = lhsTy;
@@ -2716,6 +2722,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 case TokenType.Minus: binOp = 'sub'; break;
                                 case TokenType.Star: binOp = 'mul'; break;
                                 case TokenType.Slash: binOp = signed ? 'sdiv' : 'udiv'; break;
+                                case TokenType.Percent: binOp = signed ? 'srem' : 'urem'; break;
                                 case TokenType.Lt: binOp = 'icmp ' + (signed ? 'slt' : 'ult'); break;
                                 case TokenType.Le: binOp = 'icmp ' + (signed ? 'sle' : 'ule'); break;
                                 case TokenType.Gt: binOp = 'icmp ' + (signed ? 'sgt' : 'ugt'); break;
