@@ -1,0 +1,11 @@
+fn main(): i32 {
+    let x: {x: i32} = bitcast(1);
+    // ^ the initializer of this local is bitcast::<i32, ?0t> during type checking,
+    // so we would fail in the property access below, however we can use the provided type annotation
+    // to make it work.
+    x.x;
+
+    // ...but we still must prove that the initializer is a subtype. this should error:
+    let y: i32 = 1i64;
+    return y;
+}

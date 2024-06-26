@@ -333,7 +333,7 @@ type Expr = { span: Span } & (
     | { type: "Tuple", elements: Expr[] }
 );
 
-type LetDecl = { type: 'LetDecl', name: string, init: Expr };
+type LetDecl = { type: 'LetDecl', name: string, ty: AstTy | null, init: Expr };
 
 type AstFnSignature = {
     name: string,
@@ -829,10 +829,14 @@ function parse(src: string): Program {
                 let letSpan = tokens[i].span;
                 i++;
                 const name = expectIdent();
+                let ty: AstTy | null = null;
+                if (eatToken(TokenType.Colon, false)) {
+                    ty = parseTy();
+                }
                 eatToken(TokenType.Assign);
                 const init = parseRootExpr();
                 eatToken(TokenType.Semi);
-                return { span: joinSpan(letSpan, tokens[i - 1].span), type: 'LetDecl', name, init };
+                return { span: joinSpan(letSpan, tokens[i - 1].span), ty, type: 'LetDecl', name, init };
             }
             case TokenType.Type: {
                 const tySpan = tokens[i].span;
@@ -1011,6 +1015,9 @@ function computeResolutions(ast: Program): Resolutions {
             case 'LetDecl': {
                 valRes.add(stmt.name, stmt);
                 resolveExpr(stmt.init);
+                if (stmt.ty) {
+                    resolveTy(stmt.ty);
+                }
                 break;
             }
             case 'TyAlias': {
@@ -1596,7 +1603,21 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
             case 'Expr': typeckExpr(stmt.value); break;
             case 'LetDecl': {
                 const rety = typeckExpr(stmt.init);
-                infcx.registerLocal(stmt, rety);
+                if (stmt.ty) {
+                    const annotatedTy = lowerTy(stmt.ty);
+                    infcx.sub('Assignment', stmt.span, rety, annotatedTy);
+                    // this isn't more wrong than using `rety`, but allows some additional cases to typeck:
+                    // let x: {x:i32} = bitcast(1);
+                    // x.x;
+                    //
+                    // if we register the local with the expression's type, we'd use a type variable,
+                    // which some expressions aren't ready to deal with (eg property access)
+                    // using the annotated type allows that to compile because it won't be a type variable, but a proper record type.
+                    // we still require proving annotatedTy == initTy at the end of typeck, though, above
+                    infcx.registerLocal(stmt, annotatedTy);
+                } else {
+                    infcx.registerLocal(stmt, rety);
+                }
                 break;
             }
             case 'TyAlias': break;
@@ -1938,7 +1959,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 case 'Binary':
                                     message = `left-hand side and right-hand side must be of the same type, got ${sub.type} and ${sup.type}`;
                                     break;
-                                default: message = `${ppTy(sub)} is not a subtype of ${ppTy(sup)} (reason: '${constraint.cause}')`;
+                                default: message = `${ppTy(sub)} is not assignable to ${ppTy(sup)}`;
                             }
 
                             error(src, constraint.at, `type error: ${message}`);
