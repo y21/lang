@@ -3,8 +3,8 @@
 This is my personal language (name TBD).
 
 This mostly only exists so I can play around with my ideas around langdev.
-There's no reason for anyone to use this.
-Most of the ideas are taken from Rust (and TypeScript to some extent), or at least, that's the idea -- take all the concepts that I like and change them however I like.
+At this point, there's no reason for anyone to use this.
+Most of the ideas are taken from Rust (and TypeScript to some extent).
 
 ### Usage
 At this point the compiler is written in TypeScript (eventually it will be rewritten in this language and self-hosted).

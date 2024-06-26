@@ -1,0 +1,62 @@
+expr @ 2:19 2:20 => extern "intrinsic" fn trunc(...)
+expr @ 2:21 2:22 => i8
+expr @ 2:19 2:25 => u8
+expr @ 3:20 3:21 => extern "intrinsic" fn trunc(...)
+expr @ 3:22 3:23 => i8
+expr @ 3:20 3:26 => u16
+expr @ 4:20 4:21 => extern "intrinsic" fn trunc(...)
+expr @ 4:22 4:23 => i8
+expr @ 4:20 4:26 => u64
+expr @ 5:20 5:21 => extern "intrinsic" fn trunc(...)
+expr @ 5:22 5:23 => u64
+expr @ 5:20 5:27 => i8
+expr @ 6:20 6:21 => extern "intrinsic" fn trunc(...)
+expr @ 6:22 6:23 => u64
+expr @ 6:20 6:27 => u8
+expr @ 8:17 8:18 => extern "intrinsic" fn ext(...)
+expr @ 8:19 8:20 => i8
+expr @ 8:17 8:23 => u8
+expr @ 9:18 9:19 => extern "intrinsic" fn ext(...)
+expr @ 9:20 9:21 => i8
+expr @ 9:18 9:24 => u16
+expr @ 10:18 10:19 => extern "intrinsic" fn ext(...)
+expr @ 10:20 10:21 => u8
+expr @ 10:18 10:24 => u16
+expr @ 11:18 11:19 => extern "intrinsic" fn ext(...)
+expr @ 11:20 11:21 => u8
+expr @ 11:18 11:24 => i16
+expr @ 12:18 12:19 => extern "intrinsic" fn ext(...)
+expr @ 12:20 12:21 => i8
+expr @ 12:18 12:24 => u64
+expr @ 13:18 13:19 => extern "intrinsic" fn ext(...)
+expr @ 13:20 13:21 => u64
+expr @ 13:18 13:25 => i8
+expr @ 14:18 14:19 => extern "intrinsic" fn ext(...)
+expr @ 14:20 14:21 => u64
+expr @ 14:18 14:25 => u8
+expr @ 1:11 16:1 => ()
+
+
+
+define void @main() {
+prologue:
+br label %bb.0
+
+bb.0:
+%l.0 = trunc i8 0 to i8
+%l.1 = trunc i8 0 to i16
+%l.2 = trunc i8 0 to i64
+%l.3 = trunc i64 0 to i8
+%l.4 = trunc i64 0 to i8
+%l.5 = sext i8 0 to i8
+%l.6 = sext i8 0 to i16
+%l.7 = zext i8 0 to i16
+%l.8 = zext i8 0 to i16
+%l.9 = sext i8 0 to i64
+%l.10 = zext i64 0 to i8
+%l.11 = zext i64 0 to i8
+ret void
+
+}
+
+

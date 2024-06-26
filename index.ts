@@ -905,7 +905,7 @@ enum PrimitiveTy {
     Str
 }
 
-type IntrinsicName = 'bitcast';
+type IntrinsicName = 'bitcast' | 'ext' | 'trunc';
 type Intrinsic = ({ abi: 'intrinsic' }) & ExternFnDecl;
 
 function mkIntrinsic(name: IntrinsicName, generics: Generics, parameters: FnParameter[], ret: AstTy): Intrinsic {
@@ -925,7 +925,11 @@ function identPathTy(ident: string): AstTy {
     return { type: 'Path', value: { segments: [{ args: [], ident }] } };
 }
 
-const INTRINSICS: Intrinsic[] = [mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))];
+const INTRINSICS: Intrinsic[] = [
+    mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('ext', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('trunc', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))
+];
 type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
 type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
 type TypeResolutions = Map<AstTy, TypeResolution>;
@@ -2076,7 +2080,9 @@ type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'Unary', op: UnaryOp, assignee: MirLocalId<true>, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOf', assignee: MirLocalId<true>, place: MirPlace }
-    | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
+    | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
+    | { type: 'Ext', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
+    | { type: 'Trunc', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
 type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
     | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
@@ -2259,7 +2265,9 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
             return { type: 'Unreachable' };
         }
 
-        function lowerExpr(expr: Expr): MirValue | ({ type: 'Place' } & MirPlace) {
+        type LowerExprResult = MirValue | ({ type: 'Place' } & MirPlace);
+
+        function lowerExpr(expr: Expr): LowerExprResult {
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
                 case 'String': return { type: 'str', value: expr.value };
@@ -2334,15 +2342,20 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     if (expr.callee.type === 'Literal') {
                         const res = resolutions.valueResolutions.get(expr.callee)!;
                         if (res.type === 'ExternFnDecl' && res.abi === 'intrinsic') {
+                            const transmutableIntrinsic = (type: 'Bitcast' | 'Ext' | 'Trunc'): LowerExprResult => {
+                                const fromTy = instantiateTy(sig.parameters[0], args);
+                                const toTy = instantiateTy(sig.ret, args);
+                                const assignee = addLocal(toTy, true);
+                                const value = asValue(lowerExpr(expr.args[0]), fromTy);
+
+                                block.stmts.push({ type, assignee, from_ty: fromTy, to_ty: toTy, value });
+                                return { type: 'Local', value: assignee };
+                            }
+
                             switch (res.sig.name) {
-                                case 'bitcast': {
-                                    const fromTy = instantiateTy(sig.parameters[0], args);
-                                    const toTy = instantiateTy(sig.ret, args);
-                                    const assignee = addLocal(toTy, true);
-                                    const value = asValue(lowerExpr(expr.args[0]), fromTy);
-                                    block.stmts.push({ type: 'Bitcast', assignee, from_ty: fromTy, to_ty: toTy, value });
-                                    return { type: 'Local', value: assignee };
-                                }
+                                case 'bitcast': return transmutableIntrinsic('Bitcast');
+                                case 'ext': return transmutableIntrinsic('Ext');
+                                case 'trunc': return transmutableIntrinsic('Trunc');
                                 default: throw new Error(`unknown intrinsic: ${res.sig.name}`);
                             }
                         }
@@ -2774,6 +2787,27 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                 default: assertUnreachable(stmt);
                             }
                             break;
+                        case 'Ext': {
+                            if (stmt.from_ty.type !== 'int' || stmt.to_ty.type !== 'int') {
+                                throw new Error('ext intrinsic only works on int types');
+                            }
+                            let instruction = stmt.from_ty.value.signed ? 'sext' : 'zext';
+                            const fromTyS = llTy(stmt.from_ty);
+                            const toTyS = llTy(stmt.to_ty);
+                            const valueS = compileValueToLocal(stmt.value);
+                            output += `%l.${stmt.assignee} = ${instruction} ${fromTyS} ${valueS} to ${toTyS}\n`;
+                            break;
+                        }
+                        case 'Trunc': {
+                            if (stmt.from_ty.type !== 'int' || stmt.to_ty.type !== 'int') {
+                                throw new Error('trunc intrinsic only works on int types');
+                            }
+                            const fromTyS = llTy(stmt.from_ty);
+                            const toTyS = llTy(stmt.to_ty);
+                            const valueS = compileValueToLocal(stmt.value);
+                            output += `%l.${stmt.assignee} = trunc ${fromTyS} ${valueS} to ${toTyS}\n`;
+                            break;
+                        }
                         default: assertUnreachable(stmt);
                     }
                 }
