@@ -1,0 +1,4 @@
+fn main() {
+  let x = bitcast(0);
+  x = bitcast(1);
+}

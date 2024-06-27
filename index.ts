@@ -1215,7 +1215,8 @@ function isUnit(ty: Ty): boolean {
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary';
-type Constraint = { cause: ConstraintCause, at: Span } & ConstraintType;
+type Constraint = { cause: ConstraintCause, at: Span, depth: number } & ConstraintType;
+const MAX_CONSTRAINT_DEPTH = 200;
 
 type FnLocalState = {
     expectedReturnTy: Ty;
@@ -1259,7 +1260,11 @@ class Infcx {
     constructor() { }
 
     sub(cause: ConstraintCause, at: Span, sub: Ty, sup: Ty) {
-        this.constraints.push({ type: 'SubtypeOf', at, cause, sub, sup });
+        this.constraints.push({ type: 'SubtypeOf', at, cause, sub, sup, depth: 0 });
+    }
+
+    nestedSub(parent: Constraint, sub: Ty, sup: Ty, at?: Span) {
+        this.constraints.push({ type: 'SubtypeOf', at: at || parent.at, cause: parent.cause, depth: parent.depth + 1, sub, sup });
     }
 
     mkTyVar(origin: TyVarOrigin): Ty {
@@ -1345,7 +1350,7 @@ function ppTy(ty: Ty): string {
     }
 }
 
-function error(src: string, span: Span, message: string) {
+function error(src: string, span: Span, message: string, note?: string) {
     const red = (text: string) => options.colors ? `\x1b[1;31m${text}\x1b[0m` : text;
 
     let lineStart = src.lastIndexOf('\n', span[0]);
@@ -1359,6 +1364,10 @@ function error(src: string, span: Span, message: string) {
     console.error(' '.repeat(col - 1) + red(
         '^'.repeat(snipLen) +
         `  ${message}`));
+    if (note) {
+        console.error();
+        console.error('note: ' + note);
+    }
 }
 
 // creates a new type with type parameters replaced with the provided args
@@ -1861,8 +1870,24 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                 const constraint = infcx.constraints.pop()!;
                 const sub = infcx.tryResolve(constraint.sub);
                 const sup = infcx.tryResolve(constraint.sup);
+                if (constraint.depth >= MAX_CONSTRAINT_DEPTH) {
+                    let pretty: string;
+                    switch (constraint.type) {
+                        case 'SubtypeOf':
+                            // <: would be more correct, but there is currently no difference, and this is easier to understand
+                            pretty = `${ppTy(sub)} == ${ppTy(sup)}`;
+                            break;
+                    }
+                    error(
+                        src, constraint.at,
+                        `type error: overflow evaluating whether \`${pretty}\` holds`,
+                        'consider adding type annotations to help inference'
+                    );
+                    errors = true;
+                    continue;
+                }
 
-                function subFields(sub: Ty & RecordType, sup: Ty & RecordType) {
+                function subFields(parent: Constraint, sub: Ty & RecordType, sup: Ty & RecordType) {
                     if (sub.fields.length !== sup.fields.length) {
                         // Fast fail: no point in comparing fields when they lengths don't match.
                         error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
@@ -1873,7 +1898,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             if (subf[0] !== supf[0]) {
                                 error(src, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
                             } else {
-                                infcx.constraints.push({ at: constraint.at, cause: constraint.cause, sub: subf[1], sup: supf[1], type: 'SubtypeOf' });
+                                infcx.nestedSub(parent, subf[1], supf[1]);
                             }
                         }
                         madeProgress = true;
@@ -1894,7 +1919,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         ) {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {
-                            subFields(sub, sup);
+                            subFields(constraint, sub, sup);
                         } else if (sub.type === 'Tuple' && sup.type === 'Tuple') {
                             if (sub.elements.length !== sup.elements.length) {
                                 error(src, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
@@ -1902,17 +1927,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 for (let i = 0; i < sub.elements.length; i++) {
                                     const subf = sub.elements[i];
                                     const supf = sup.elements[i];
-                                    infcx.constraints.push({ type: 'SubtypeOf', at: constraint.at, cause: constraint.cause, sub: subf, sup: supf });
+                                    infcx.nestedSub(constraint, subf, supf);
                                 }
                             }
                         } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
-                            infcx.constraints.push({
-                                type: 'SubtypeOf',
-                                at: constraint.at,
-                                cause: constraint.cause,
-                                sub: sub.pointee,
-                                sup: sup.pointee
-                            });
+                            infcx.nestedSub(constraint, sub.pointee, sup.pointee);
                         } else if (sub.type === 'Record' && sup.type === 'Alias') {
                             // TODO: also check args
                             const nsup = normalize(sup);
@@ -1925,11 +1944,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                 ) {
                                     error(src, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
                                 }
-                                subFields(sub, nsup);
+                                subFields(constraint, sub, nsup);
                             }
                         } else if (sub.type === 'Alias' && sup.type === 'Alias') {
                             // TODO: check constructibleIn for both aliases
-                            infcx.constraints.push({ type: 'SubtypeOf', sub: normalize(sub), sup: normalize(sup), at: constraint.at, cause: constraint.cause });
+                            infcx.nestedSub(constraint, normalize(sub), normalize(sup));
                         } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                             let tyvid: { type: 'TyVid' } & Ty;
                             let other: Ty;
@@ -1947,7 +1966,7 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                             constrainVid(tyvid.id, other);
                         } else if (sub.type === 'TyVid' && sup.type === 'TyVid') {
                             // Both related types are type variables, can't progress
-                            infcx.constraints.push(constraint);
+                            infcx.nestedSub(constraint, sub, sup);
                         }
                         else if (sub.type === 'never') {
                             // OK. Never is a subtype of all types.

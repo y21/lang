@@ -1,0 +1,10 @@
+expr @ 2:11 2:18 => extern "intrinsic" fn bitcast(...)
+expr @ 2:19 2:20 => i32
+expr @ 2:11 2:21 => ?1t
+expr @ 3:7 3:14 => extern "intrinsic" fn bitcast(...)
+expr @ 3:15 3:16 => i32
+expr @ 3:7 3:17 => ?3t
+expr @ 3:3 3:4 => ?1t
+expr @ 3:3 3:17 => ()
+expr @ 1:11 5:1 => ()
+

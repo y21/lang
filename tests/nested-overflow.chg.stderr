@@ -1,0 +1,14 @@
+
+
+  x = bitcast(1);
+  ^^^^^^^^^^^^^^  type error: overflow evaluating whether `?3t == ?1t` holds
+
+note: consider adding type annotations to help inference
+
+
+  let x = bitcast(0);
+          ^^^^^^^^^^  type error: unconstrained type variable created here
+
+
+  x = bitcast(1);
+      ^^^^^^^^^^  type error: unconstrained type variable created here
