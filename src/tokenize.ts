@@ -30,7 +30,14 @@ export function tokenize(src: string): Token[] {
             case ']': tokens.push({ span: [start, i + 1], ty: TokenType.RSquare }); break;
             case '{': tokens.push({ span: [start, i + 1], ty: TokenType.LBrace }); break;
             case '}': tokens.push({ span: [start, i + 1], ty: TokenType.RBrace }); break;
-            case '%': tokens.push({ span: [start, i + 1], ty: TokenType.Percent }); break;
+            case '%':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.RemAssign });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Percent });
+                }
+                break;
             case ':': tokens.push({ span: [start, i + 1], ty: TokenType.Colon }); break;
             case '!':
                 if (src[i + 1] === '=') {
