@@ -63,9 +63,9 @@ br label %bt.10
 bt.12:
 %l.4 = load [10 x i32], [10 x i32]* %t.8
 store [10 x i32] %l.4, [10 x i32]* %l.3
-%t.18 = getelementptr [7 x i32], [7 x i32]* %l.1, i32 0, i32 5
+%t.18 = getelementptr [7 x i32], [7 x i32]* %l.1, i32 0, i64 5
 %l.5 = load i32, i32* %t.18
-%t.19 = getelementptr [10 x i32], [10 x i32]* %l.3, i32 0, i32 3
+%t.19 = getelementptr [10 x i32], [10 x i32]* %l.3, i32 0, i64 3
 %l.6 = load i32, i32* %t.19
 %l.7 = add i32 %l.5, %l.6
 store i32 %l.7, i32* %l.0
