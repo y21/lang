@@ -312,6 +312,7 @@ type Expr = { span: Span } & (
     | { type: "FnCall"; args: Expr[]; callee: Expr }
     | { type: "Index"; target: Expr; index: Expr }
     | { type: "ArrayLiteral"; elements: Expr[] }
+    | { type: "ArrayRepeat"; element: Expr; count: number }
     | { type: "Number"; value: number; suffix: IntTy }
     | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
@@ -593,6 +594,26 @@ function parse(src: string): Program {
                 }
                 return { span: joinSpan(span, tokens[i - 1].span), type: 'Record', fields };
             }
+            case TokenType.LSquare: {
+                const span = tokens[i].span;
+                i++;
+                const elements: Expr[] = [];
+                while (!eatToken(TokenType.RSquare, false)) {
+                    if (elements.length > 0) eatToken(TokenType.Comma);
+                    elements.push(parseRootExpr());
+
+                    if (elements.length === 1 && eatToken(TokenType.Semi, false)) {
+                        // We have something like `[expr;`: this is an array repeat expression
+                        const count = parseRootExpr();
+                        if (count.type !== 'Number') {
+                            throw new Error(`array repeat expression must be a number, got ${count.type}`);
+                        }
+                        eatToken(TokenType.RSquare);
+                        return { type: 'ArrayRepeat', count: count.value, element: elements[0], span: joinSpan(span, tokens[i - 1].span) };
+                    }
+                }
+                return { type: 'ArrayLiteral', elements, span: joinSpan(span, tokens[i - 1].span) };
+            }
             default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
         }
         i++;
@@ -736,6 +757,12 @@ function parse(src: string): Program {
                 case TokenType.Percent: {
                     const rhs = parseExpr(prec);
                     expr = { type: 'Binary', op: op.ty, lhs: expr, rhs, span: joinSpan(expr.span, rhs.span) };
+                    break;
+                }
+                case TokenType.LSquare: {
+                    const index = parseRootExpr();
+                    eatToken(TokenType.RSquare);
+                    expr = { type: 'Index', index, span: joinSpan(expr.span, tokens[i - 1].span), target: expr };
                     break;
                 }
                 default: throw `Unhandled binary/infix operator ${op}`
@@ -1052,6 +1079,7 @@ function computeResolutions(ast: Program): Resolutions {
             case 'Block': for (const stmt of expr.stmts) resolveStmt(stmt); break;
             case 'Return': resolveExpr(expr.value); break;
             case 'ArrayLiteral': for (const e of expr.elements) resolveExpr(e); break;
+            case 'ArrayRepeat': resolveExpr(expr.element); break;
             case 'FnCall': {
                 for (const arg of expr.args) resolveExpr(arg);
                 resolveExpr(expr.callee);
@@ -1472,6 +1500,7 @@ function forEachExpr(expr: Expr, f: (e: Expr) => void) {
         case 'Block': for (const stmt of expr.stmts) forEachExprInStmt(stmt, f); break;
         case 'Return': forEachExpr(expr.value, f); break;
         case 'ArrayLiteral': for (const elem of expr.elements) forEachExpr(elem, f); break;
+        case 'ArrayRepeat': forEachExpr(expr.element, f); break;
         case 'Assignment':
             forEachExpr(expr.target, f);
             forEachExpr(expr.value, f);
@@ -1664,6 +1693,10 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                         for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
                     }
                     return { type: 'Array', flags: elemTy.flags, elemTy, len: expr.elements.length };
+                }
+                case 'ArrayRepeat': {
+                    const elemTy = typeckExpr(expr.element);
+                    return { type: 'Array', elemTy, flags: elemTy.flags, len: expr.count };
                 }
                 case 'Assignment': {
                     infcx.sub('Assignment', expr.span, typeckExpr(expr.value), typeckExpr(expr.target));
@@ -1930,6 +1963,11 @@ function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
                                     infcx.nestedSub(constraint, subf, supf);
                                 }
                             }
+                        } else if (sub.type === 'Array' && sup.type === 'Array') {
+                            if (sub.len !== sup.len) {
+                                error(src, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
+                            }
+                            infcx.nestedSub(constraint, sub.elemTy, sup.elemTy);
                         } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
                             infcx.nestedSub(constraint, sub.pointee, sup.pointee);
                         } else if (sub.type === 'Record' && sup.type === 'Alias') {
@@ -2113,7 +2151,7 @@ const UNIT_MIR: MirValue = { type: 'Tuple', value: [] };
  */
 type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary: temporary };
 type MirLocalId<temporary extends boolean = boolean> = number;
-type Projection = { type: 'Field', property: string | number } | { type: 'Deref' };
+type Projection = { type: 'Field', property: string | number } | { type: 'Index', index: MirValue } | { type: 'Deref' };
 type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
 type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, lhsTy: Ty, rhs: MirValue }
@@ -2122,7 +2160,9 @@ type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
     | { type: 'AddrOf', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'Bitcast', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
     | { type: 'Ext', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
-    | { type: 'Trunc', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue };
+    | { type: 'Trunc', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
+    | { type: 'InitArrayLit', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, values: MirValue[] }
+    | { type: 'InitArrayRepeat', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, value: MirValue, count: number };
 type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
     | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
@@ -2437,6 +2477,38 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                         }
                     }
                 }
+                case 'Index': {
+                    const target = requireAsPlace(lowerExpr(expr.target));
+                    const index = asValue(lowerExpr(expr.index), typeck.exprTys.get(expr.index)!);
+                    target.projections.push({ type: 'Index', index });
+                    return target;
+                }
+                case 'ArrayLiteral':
+                case 'ArrayRepeat': {
+                    const exprTy = typeck.exprTys.get(expr)!;
+                    if (exprTy.type !== 'Array') {
+                        throw new Error('array literal did not produce array type');
+                    }
+
+                    const assignee = addLocal(exprTy, true);
+                    if (expr.type === 'ArrayLiteral') {
+                        block.stmts.push({
+                            assignee,
+                            type: 'InitArrayLit',
+                            ty: exprTy,
+                            values: expr.elements.map(e => asValue(lowerExpr(e), typeck.exprTys.get(e)!))
+                        });
+                    } else {
+                        block.stmts.push({
+                            assignee,
+                            type: 'InitArrayRepeat',
+                            ty: exprTy,
+                            count: expr.count,
+                            value: asValue(lowerExpr(expr.element), typeck.exprTys.get(expr.element)!)
+                        });
+                    }
+                    return { type: 'Local', value: assignee };
+                }
                 case 'Record': {
                     const fields: RecordFields<MirValue> = expr.fields.map(([key, expr]) => {
                         return [key, asValue(lowerExpr(expr), typeck.exprTys.get(expr)!)];
@@ -2488,7 +2560,7 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     });
                     return { type: 'Tuple', value: elements };
                 }
-                default: todo(`Unhandled expr ${expr.type}`);
+                default: assertUnreachable(expr);
             }
         }
 
@@ -2521,6 +2593,12 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
     const _codegenCache = new Set<string>();
     const _externDeclarations = new Set<string>();
     let declareSection = '';
+    const addExternDecl = (name: string, mkSig: () => string) => {
+        if (!_externDeclarations.has(name)) {
+            _externDeclarations.add(name);
+            declareSection += mkSig();
+        }
+    };
     let fnSection = '';
     let constSection = '';
     let constCount = 0;
@@ -2539,8 +2617,9 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                 }
             case 'ExternFnDef': throw new Error('extern fn in llir lowering');
             case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
-            case 'FnDef':
             case 'Array':
+                return `[${ty.len} x ${llTy(ty.elemTy)}]`;
+            case 'FnDef':
                 todo(ty.type);
             case 'Alias':
                 return llTy(normalize(ty));
@@ -2582,6 +2661,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
 
             let _temps = 0;
             let tempLocal = () => _temps++;
+            let tempBlock = tempLocal;
             const mir = astToMir(src, mangledName, decl, args, res, typeck);
 
             const getLocal = <temporary extends boolean>(id: MirLocalId<temporary>): MirLocal<temporary> => {
@@ -2723,10 +2803,42 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             finalTy = normalize(oldTy.pointee);
                             break;
                         }
+                        case 'Index': {
+                            if (finalTy.type !== 'Array') {
+                                throw new Error('index target must be an array');
+                            }
+                            const index = compileValueToLocal(projection.index);
+                            // TODO: bounds checks
+                            output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${index}\n`;
+                            finalTy = finalTy.elemTy;
+                            break;
+                        }
+                        default: assertUnreachable(projection);
                     }
                 }
 
                 return { finalTy, finalLocal };
+            }
+
+            function compileTemporaryLoop(
+                preLoop: () => void,
+                header: () => string /* local of the i1 condition */,
+                body: () => void,
+            ) {
+                const headerBlock = `bt.${tempBlock()}`;
+                const bodyBlock = `bt.${tempBlock()}`;
+                const exitBlock = `bt.${tempBlock()}`;
+                preLoop();
+
+                output += `br label %${headerBlock}\n`;
+                output += `${headerBlock}:\n`;
+                const conditionLocal = header();
+                output += `br i1 ${conditionLocal}, label %${bodyBlock}, label %${exitBlock}\n`;
+
+                output += `${bodyBlock}:\n`;
+                body();
+                output += `br label %${headerBlock}\n`
+                output += `${exitBlock}:\n`;
             }
 
             let writeBB = (name: string) => output += name + ':\n';
@@ -2848,6 +2960,59 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             output += `%l.${stmt.assignee} = trunc ${fromTyS} ${valueS} to ${toTyS}\n`;
                             break;
                         }
+                        case 'InitArrayRepeat': {
+                            const arrayLocal = `%t.${tempLocal()}`;
+                            const counterLocal = `%t.${tempLocal()}`;
+                            const arrayTyS = llTy(stmt.ty);
+                            const valTyS = llTy(stmt.ty.elemTy);
+                            const count = stmt.count;
+                            const value = compileValueToLocal(stmt.value);
+
+                            // TODO: we can special case with a memset for {i,u}8-32; it accepts up to an int
+                            // For now, just generate a loop that initializes each element.
+                            compileTemporaryLoop(
+                                () => {
+                                    output += `${arrayLocal} = alloca ${arrayTyS}\n`
+                                    output += `${counterLocal} = alloca i32\n`;
+                                },
+                                () => {
+                                    const loadTemp = `%t.${tempLocal()}`;
+                                    const conditionTemp = `%t.${tempLocal()}`;
+                                    output += `${loadTemp} = load i32, i32* ${counterLocal}\n`
+                                    output += `${conditionTemp} = icmp ult i32 ${loadTemp}, ${count}\n`;
+                                    return conditionTemp;
+                                },
+                                () => {
+                                    const ptrLocal = `%t.${tempLocal()}`;
+                                    const curCounterLocal = `%t.${tempLocal()}`;
+                                    const addLocal = `%t.${tempLocal()}`;
+                                    output += `${curCounterLocal} = load i32, i32* ${counterLocal}\n`
+                                    output += `${ptrLocal} = getelementptr ${arrayTyS}, ${arrayTyS}* ${arrayLocal}, i32 0, i32 ${curCounterLocal}\n`;
+                                    output += `store ${valTyS} ${value}, ${valTyS}* ${ptrLocal}\n`;
+                                    output += `${addLocal} = add i32 ${curCounterLocal}, 1\n`;
+                                    output += `store i32 ${addLocal}, i32* ${counterLocal}\n`;
+                                },
+                            );
+
+                            // Array local is fully initialized. Finally, load it.
+                            output += `%l.${stmt.assignee} = load ${arrayTyS}, ${arrayTyS}* ${arrayLocal}\n`;
+
+                            break;
+                        }
+                        case 'InitArrayLit': {
+                            const arrayLocal = `%t.${tempLocal()}`;
+                            const arrayTyS = llTy(stmt.ty);
+                            const valTyS = llTy(stmt.ty.elemTy);
+                            output += `${arrayLocal} = alloca ${arrayTyS}\n`;
+                            for (let i = 0; i < stmt.values.length; i++) {
+                                const val = compileValueToLocal(stmt.values[i]);
+                                const ptrLocal = `%t.${tempLocal()}`;
+                                output += `${ptrLocal} = getelementptr ${arrayTyS}, ${arrayTyS}* ${arrayLocal}, i32 0, i32 ${i}\n`;
+                                output += `store ${valTyS} ${val}, ${valTyS}* ${ptrLocal}\n`;
+                            }
+                            output += `%l.${stmt.assignee} = load ${arrayTyS}, ${arrayTyS}* ${arrayLocal}\n`;
+                            break;
+                        }
                         default: assertUnreachable(stmt);
                     }
                 }
@@ -2878,12 +3043,10 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                                     break;
                                 }
                                 case 'ExternFnDecl': {
-                                    if (!_externDeclarations.has(terminator.decl.sig.name)) {
+                                    addExternDecl(terminator.decl.sig.name, () => {
                                         const ret = returnTy(terminator.decl.sig, typeck)!;
-
-                                        declareSection += `declare ${isUnit(ret) ? 'void' : llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
-                                        _externDeclarations.add(terminator.decl.sig.name);
-                                    }
+                                        return `declare ${isUnit(ret) ? 'void' : llTy(ret)} @${terminator.decl.sig.name}(${parameterList})\n`;
+                                    });
                                     mangledName = terminator.decl.sig.name;
                                     break;
                                 }
