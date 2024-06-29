@@ -32,7 +32,7 @@ function timed<T>(what: string, f: () => T): T {
     if (tyres.hadErrors) {
         return;
     }
-    const llir = timed('llir/mir codegen', () => codegen(src, ast, resolutions, tyres));
+    const llir = timed('llir/mir codegen', () => codegen(src, resolutions, tyres));
 
     if (options.printLlirOnly) {
         console.log(llir);
