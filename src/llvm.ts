@@ -238,8 +238,9 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                                 throw new Error('index target must be an array');
                             }
                             const index = compileValueToLocal(projection.index);
+                            const valTyS = llValTy(mir, projection.index);
                             // TODO: bounds checks
-                            output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${index}\n`;
+                            output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, ${valTyS} ${index}\n`;
                             finalTy = finalTy.elemTy;
                             break;
                         }
