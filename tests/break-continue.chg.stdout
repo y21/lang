@@ -1,0 +1,85 @@
+expr @ 2:13 2:14 => i32
+expr @ 3:11 3:15 => bool
+expr @ 4:12 4:13 => i32
+expr @ 4:17 4:19 => i32
+expr @ 4:12 4:19 => bool
+expr @ 5:13 5:18 => never
+expr @ 4:20 6:10 => ()
+expr @ 4:9 6:10 => ()
+expr @ 7:12 7:13 => i32
+expr @ 7:17 7:18 => i32
+expr @ 7:12 7:18 => bool
+expr @ 8:17 8:18 => i32
+expr @ 8:21 8:22 => i32
+expr @ 8:17 8:22 => i32
+expr @ 8:13 8:14 => i32
+expr @ 8:13 8:22 => ()
+expr @ 9:13 9:21 => never
+expr @ 7:19 10:10 => ()
+expr @ 7:9 10:10 => ()
+expr @ 11:13 11:14 => i32
+expr @ 11:17 11:18 => i32
+expr @ 11:13 11:18 => i32
+expr @ 11:9 11:10 => i32
+expr @ 11:9 11:18 => ()
+expr @ 3:16 12:6 => ()
+expr @ 3:5 12:6 => ()
+expr @ 13:12 13:13 => i32
+expr @ 13:5 13:13 => never
+expr @ 1:16 15:1 => ()
+
+
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 0, i32* %l.1
+br label %bb.1
+
+bb.1:
+br i1 true, label %bb.2, label %bb.3
+
+bb.2:
+%l.2 = load i32, i32* %l.1
+%l.3 = icmp sge i32 %l.2, 10
+br i1 %l.3, label %bb.5, label %bb.4
+
+bb.3:
+%l.10 = load i32, i32* %l.1
+store i32 %l.10, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+bb.4:
+%l.4 = load i32, i32* %l.1
+%l.5 = icmp eq i32 %l.4, 5
+br i1 %l.5, label %bb.8, label %bb.7
+
+bb.5:
+br label %bb.3
+
+bb.6:
+br label %bb.4
+
+bb.7:
+%l.8 = load i32, i32* %l.1
+%l.9 = add i32 %l.8, 1
+store i32 %l.9, i32* %l.1
+br label %bb.1
+
+bb.8:
+%l.6 = load i32, i32* %l.1
+%l.7 = add i32 %l.6, 2
+store i32 %l.7, i32* %l.1
+br label %bb.1
+
+bb.9:
+br label %bb.7
+
+}
+
+

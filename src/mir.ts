@@ -45,6 +45,11 @@ export type MirBlock = {
 export type MirBlockId = number;
 export type MirBody = { blocks: MirBlock[], parameters: MirLocalId<false>[], locals: MirLocal[] };
 
+type BreakableInfo = {
+    breakTarget: MirBlockId,
+    continueTarget: MirBlockId
+};
+
 const _mirBodyCache = new Map<string, MirBody>();
 
 /**
@@ -59,6 +64,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
         if (decl.body.type !== 'Block') throw `${decl.sig.name} did not have a block as its body?`;
 
         const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
+        const breakableInfo = new Map<{ type: 'While' } & Expr, BreakableInfo>();
         const locals: MirLocal[] = [];
         const addLocal = <temporary extends boolean = boolean>(ty: Ty, temporary: temporary): MirLocalId<temporary> => {
             ty = instantiateTy(ty, args);
@@ -346,6 +352,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const conditionBlock = addBlock();
                     const bodyBlock = addBlock();
                     const joinedBlock = addBlock();
+                    breakableInfo.set(expr, { breakTarget: joinedBlock, continueTarget: conditionBlock });
                     block.terminator = { type: 'Jump', target: conditionBlock };
                     block = blocks[conditionBlock];
 
@@ -369,6 +376,26 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         return asValue(lowerExpr(expr), typeck.exprTys.get(expr)!);
                     });
                     return { type: 'Tuple', value: elements };
+                }
+                case 'Break': {
+                    const { breakTarget } = breakableInfo.get(resolutions.breakableResolutions.get(expr)!.target)!;
+                    block.terminator = {
+                        type: 'Jump',
+                        target: breakTarget
+                    };
+                    const next = addBlock();
+                    block = blocks[next];
+                    return { type: 'Unreachable' };
+                }
+                case 'Continue': {
+                    const { continueTarget } = breakableInfo.get(resolutions.breakableResolutions.get(expr)!.target)!;
+                    block.terminator = {
+                        type: 'Jump',
+                        target: continueTarget
+                    };
+                    const next = addBlock();
+                    block = blocks[next];
+                    return { type: 'Unreachable' };
                 }
                 default: assertUnreachable(expr);
             }

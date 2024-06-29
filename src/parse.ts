@@ -31,6 +31,8 @@ export type Expr = { span: Span } & (
     | { type: "Assignment"; target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string | number }
     | { type: "Return"; value: Expr }
+    | { type: 'Break' }
+    | { type: 'Continue' }
     | { type: "Unary"; op: UnaryOp; rhs: Expr }
     | {
         type: "Binary";
@@ -326,6 +328,8 @@ export function parse(src: string): Program {
                 }
                 return { type: 'ArrayLiteral', elements, span: joinSpan(span, tokens[i - 1].span) };
             }
+            case TokenType.Break: return { type: 'Break', span: tokens[i++].span };
+            case TokenType.Continue: return { type: 'Continue', span: tokens[i++].span };
             default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
         }
         i++;

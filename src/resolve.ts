@@ -64,15 +64,31 @@ export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: Prim
 export type TypeResolutions = Map<AstTy, TypeResolution>;
 export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter });
 export type ValueResolutions = Map<Expr, ValueResolution>;
-export type Resolutions = { tyResolutions: TypeResolutions, valueResolutions: ValueResolutions, entrypoint: FnDecl };
+export type Resolutions = {
+    tyResolutions: TypeResolutions,
+    valueResolutions: ValueResolutions,
+    breakableResolutions: Map<Expr, Breakable>,
+    entrypoint: FnDecl
+};
+
+export type BreakableType = 'While';
+export type Breakable = { type: BreakableType, target: { type: 'While' } & Expr };
 
 export function computeResolutions(ast: Program): Resolutions {
     const tyRes = new ResNamespace<TypeResolution>();
     const valRes = new ResNamespace<ValueResolution>();
+    const breakableStack: Breakable[] = [];
+    const findBreakable = (): Breakable => {
+        if (breakableStack.length === 0) {
+            throw new Error('no breakable found');
+        }
+        return breakableStack[breakableStack.length - 1];
+    }
     let entrypoint: FnDecl | null = null;
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
     const identMap: Map<Expr, ValueResolution> = new Map();
+    const breakableMap: Map<Expr, Breakable> = new Map();
 
     const withAllScopes = (f: () => void) => {
         tyRes.withScope(() => {
@@ -224,8 +240,9 @@ export function computeResolutions(ast: Program): Resolutions {
                 }
                 break;
             case 'While':
-                resolveExpr(expr.body);
                 resolveExpr(expr.condition);
+                breakableStack.push({ type: 'While', target: expr });
+                resolveExpr(expr.body);
                 break;
             case 'Unary':
                 resolveExpr(expr.rhs);
@@ -235,6 +252,12 @@ export function computeResolutions(ast: Program): Resolutions {
                     resolveExpr(element);
                 }
                 break;
+            case 'Break':
+            case 'Continue': {
+                const target = findBreakable();
+                breakableMap.set(expr, target);
+                break;
+            }
             default: assertUnreachable(expr);
         }
     }
@@ -284,5 +307,5 @@ export function computeResolutions(ast: Program): Resolutions {
         throw "'main' function not found";
     }
 
-    return { tyResolutions: tyMap, valueResolutions: identMap, entrypoint };
+    return { tyResolutions: tyMap, valueResolutions: identMap, breakableResolutions: breakableMap, entrypoint };
 }

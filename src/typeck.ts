@@ -452,6 +452,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     }
                     return { type: 'Tuple', elements, flags };
                 }
+                case 'Break':
+                case 'Continue':
+                    return { type: 'never', flags: EMPTY_FLAGS };
                 default: assertUnreachable(expr);
             }
         }

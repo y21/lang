@@ -15,6 +15,8 @@ export enum TokenType {
     Ident,
     LParen,
     RParen,
+    Break,
+    Continue,
     LSquare,
     RSquare,
     LBrace,

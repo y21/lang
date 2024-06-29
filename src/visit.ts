@@ -67,6 +67,9 @@ export function forEachExpr(expr: Expr, f: (e: Expr) => void) {
                 forEachExpr(element, f);
             }
             break;
+        case 'Break':
+        case 'Continue':
+            break;
         default: assertUnreachable(expr);
     }
 }
