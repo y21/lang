@@ -67,13 +67,37 @@ export function tokenize(src: string): Token[] {
                 }
                 break;
             case ',': tokens.push({ span: [start, i + 1], ty: TokenType.Comma }); break;
-            case '+': tokens.push({ span: [start, i + 1], ty: TokenType.Plus }); break;
-            case '-': tokens.push({ span: [start, i + 1], ty: TokenType.Minus }); break;
-            case '*': tokens.push({ span: [start, i + 1], ty: TokenType.Star }); break;
+            case '+':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.AddAssign });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Plus });
+                }
+                break;
+            case '-':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.SubAssign });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Minus });
+                }
+                break;
+            case '*':
+                if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.MulAssign });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Star });
+                }
+                break;
             case '&': tokens.push({ span: [start, i + 1], ty: TokenType.And }); break;
             case '/': {
                 if (src[i + 1] === '/') {
                     while (i < src.length && src[i] !== '\n') i++;
+                } else if (src[i + 1] === '=') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.DivAssign });
+                    i++;
                 } else {
                     tokens.push({ span: [start, i + 1], ty: TokenType.Slash }); break;
                 }

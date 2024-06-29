@@ -18,6 +18,13 @@ export type BinaryOp =
 
 export type UnaryOp = TokenType.Not;
 
+export type AssignmentKind = TokenType.Assign
+    | TokenType.AddAssign
+    | TokenType.SubAssign
+    | TokenType.MulAssign
+    | TokenType.DivAssign
+    | TokenType.RemAssign;
+
 export type Expr = { span: Span } & (
     | { type: "Block"; stmts: Stmt[] }
     | { type: "Literal"; ident: string, args: AstTy[] | null }
@@ -28,7 +35,7 @@ export type Expr = { span: Span } & (
     | { type: "Number"; value: number; suffix: IntTy }
     | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
-    | { type: "Assignment"; target: Expr; value: Expr }
+    | { type: "Assignment"; op: AssignmentKind, target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string | number }
     | { type: "Return"; value: Expr }
     | { type: 'Break' }
@@ -119,13 +126,23 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     [TokenType.EqEq]: 8,
     [TokenType.NotEq]: 8,
     // Assignment x = y
-    [TokenType.Assign]: 2
+    [TokenType.Assign]: 2,
+    [TokenType.AddAssign]: 2,
+    [TokenType.SubAssign]: 2,
+    [TokenType.MulAssign]: 2,
+    [TokenType.DivAssign]: 2,
+    [TokenType.RemAssign]: 2,
 };
 const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.LParen]: 'ltr',
     [TokenType.Dot]: 'ltr',
     [TokenType.LSquare]: 'ltr',
     [TokenType.Assign]: 'rtl',
+    [TokenType.AddAssign]: 'rtl',
+    [TokenType.SubAssign]: 'rtl',
+    [TokenType.MulAssign]: 'rtl',
+    [TokenType.DivAssign]: 'rtl',
+    [TokenType.RemAssign]: 'rtl',
     [TokenType.Plus]: 'ltr',
     [TokenType.Minus]: 'ltr',
     [TokenType.Star]: 'ltr',
@@ -435,9 +452,14 @@ export function parse(src: string): Program {
 
             i++;
             switch (op.ty) {
-                case TokenType.Assign: {
+                case TokenType.Assign:
+                case TokenType.AddAssign:
+                case TokenType.SubAssign:
+                case TokenType.MulAssign:
+                case TokenType.DivAssign:
+                case TokenType.RemAssign: {
                     const rhs = parseExpr(prec);
-                    expr = { type: 'Assignment', target: expr, value: rhs, span: joinSpan(expr.span, rhs.span) };
+                    expr = { type: 'Assignment', op: op.ty, target: expr, value: rhs, span: joinSpan(expr.span, rhs.span) };
                     break;
                 }
                 case TokenType.LParen: {

@@ -1,6 +1,7 @@
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr } from "./parse";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AssignmentKind } from "./parse";
 import { Resolutions } from "./resolve";
-import { IntTy, Ty, instantiateTy, isUnit, BOOL } from "./ty";
+import { TokenType } from "./token";
+import { IntTy, Ty, instantiateTy, isUnit, BOOL, ppTy } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert } from "./util";
 
@@ -210,14 +211,62 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     return { type: 'Local', value: res };
                 }
                 case 'Assignment': {
-                    let assignee = requireAsPlace(lowerExpr(expr.target));
+                    switch (expr.op) {
+                        case TokenType.Assign: {
+                            let assignee = requireAsPlace(lowerExpr(expr.target));
 
-                    const value = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
-                    block.stmts.push({
-                        type: 'Assignment',
-                        assignee,
-                        value
-                    });
+                            const value = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee,
+                                value
+                            });
+                            break;
+                        }
+                        case TokenType.AddAssign:
+                        case TokenType.SubAssign:
+                        case TokenType.MulAssign:
+                        case TokenType.DivAssign:
+                        case TokenType.RemAssign: {
+                            // Lower `*x() += 2` to:
+                            //   _place = x()
+                            //   _val = *_place
+                            //   _res = _val + 2
+                            //   *_place = _res
+                            const rhsTy = typeck.exprTys.get(expr.value)!;
+                            const val = asValue(lowerExpr(expr.value), rhsTy);
+                            const target = lowerExpr(expr.target);
+                            const targetPlace = requireAsPlace(target);
+                            const targetVal = asValue(target, typeck.exprTys.get(expr.target)!);
+                            const binOpRes = addLocal(rhsTy, true);
+
+                            let op: BinaryOp;
+                            switch (expr.op) {
+                                case TokenType.AddAssign: op = TokenType.Plus; break;
+                                case TokenType.SubAssign: op = TokenType.Minus; break;
+                                case TokenType.MulAssign: op = TokenType.Star; break;
+                                case TokenType.DivAssign: op = TokenType.Slash; break;
+                                case TokenType.RemAssign: op = TokenType.Percent; break;
+                            }
+
+                            block.stmts.push({
+                                assignee: binOpRes,
+                                type: 'BinOp',
+                                op,
+                                lhs: targetVal,
+                                lhsTy: rhsTy,
+                                rhs: val
+                            });
+
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee: targetPlace,
+                                value: { type: 'Local', value: binOpRes }
+                            });
+                            break;
+                        }
+                        default: assertUnreachable(expr);
+                    }
                     return UNIT_MIR;
                 }
                 case 'Deref': {
