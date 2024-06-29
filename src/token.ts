@@ -3,6 +3,7 @@ import { Span } from "./span";
 export enum TokenType {
     Extern,
     Fn,
+    Enum,
     Let,
     Return,
     If,

@@ -58,6 +58,11 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'TyVid':
             case 'never':
                 throw new Error(`${ty.type} should not appear in llir lowering`);
+            case 'Enum': if (ty.decl.variants.length > 256) {
+                throw new Error(`enum ${ty.decl.name} has too many variants`);
+            } else {
+                return 'i8';
+            }
         }
     }
 

@@ -41,6 +41,7 @@ export function mangleTy(ty: Ty): string {
             out += '$RP$';
             return out;
         }
+        case 'Enum': return ty.decl.name;
         default: assertUnreachable(ty);
     }
 }

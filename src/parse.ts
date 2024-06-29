@@ -82,11 +82,14 @@ export type Path<Ty> = { segments: PathSegment<Ty>[] };
 export type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl | TyAliasDecl | ExternFnDecl);
 export type Mutability = 'imm' | 'mut';
 export type RecordFields<Ty> = ([string, Ty])[];
+export type AstVariant = { name: string };
+export type AstEnum = { type: 'Enum', name: string, variants: AstVariant[] };
 export type AstTy = { type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
     | { type: 'Tuple', elements: AstTy[] }
     | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
     | { type: 'Record', fields: RecordFields<AstTy> }
+    | AstEnum
     | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] }
     | { type: 'Infer' };
 export type Program = { stmts: Stmt[] };
@@ -184,7 +187,12 @@ export function parse(src: string): Program {
         }
     }
 
+    let aliasTyName: string | null = null;
     function parseTy(): AstTy {
+        // We only allow `type X = enum {}`, i.e. the enum must be the direct aliased type, so reset it here.
+        let enclosingAlias = aliasTyName;
+        aliasTyName = null;
+
         let ty: AstTy;
         switch (tokens[i].ty) {
             case TokenType.Ident:
@@ -243,6 +251,25 @@ export function parse(src: string): Program {
                 break;
             }
             case TokenType.Underscore: i++; return { type: 'Infer' };
+            case TokenType.Enum:
+                i++;
+                let name: string | null = null;
+                if (tokens[i].ty === TokenType.Ident) {
+                    name = snip(tokens[i++].span);
+                } else if (aliasTyName !== null) {
+                    name = aliasTyName;
+                } else {
+                    throw new Error('anonymous enum must be a direct alias');
+                }
+
+                eatToken(TokenType.LBrace);
+                const variants: AstVariant[] = [];
+                while (!eatToken(TokenType.RBrace, false)) {
+                    if (variants.length > 0) eatToken(TokenType.Comma);
+                    variants.push({ name: expectIdent() });
+                }
+                ty = { type: 'Enum', name, variants };
+                break;
             default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
         }
 
@@ -619,7 +646,9 @@ export function parse(src: string): Program {
                 }
 
                 eatToken(TokenType.Assign);
+                aliasTyName = name;
                 const alias = parseTy();
+                aliasTyName = null;
                 eatToken(TokenType.Semi);
                 return { span: [tySpan[0], tokens[i - 1].span[1]], type: 'TyAlias', name, alias, constructibleIn, generics };
             }

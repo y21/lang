@@ -165,6 +165,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                                 args.push(lowered);
                             }
                             return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
+                        case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -198,6 +199,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 }
                 case 'Alias': throw new Error('cannot lower type aliases directly');
                 case 'Infer': throw new Error('cannot lower `_` here');
+                case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: ty };
                 default: assertUnreachable(ty);
             }
         }
@@ -682,6 +684,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 const { flags, instantiated: elements } = instantiateMany(ty.elements);
                 return { ...ty, flags, elements };
             }
+            case 'Enum': return ty;
             default: assertUnreachable(ty);
         }
     }

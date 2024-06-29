@@ -136,6 +136,7 @@ export function tokenize(src: string): Token[] {
                         case 'for': ty = TokenType.For; break;
                         case 'while': ty = TokenType.While; break;
                         case 'break': ty = TokenType.Break; break;
+                        case 'enum': ty = TokenType.Enum; break;
                         case 'continue': ty = TokenType.Continue; break;
                         default: ty = TokenType.Ident; break;
                     }

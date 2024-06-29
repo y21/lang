@@ -1,9 +1,10 @@
-import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl } from "./parse";
+import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstTy, AstEnum } from "./parse";
 import { assert } from "./util";
 
 export type RecordType = { type: 'Record', fields: RecordFields<Ty> };
 export type Bits = 8 | 16 | 32 | 64;
 export type IntTy = { signed: boolean, bits: Bits };
+export type Variant = { name: string };
 export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'Tuple', elements: Ty[] }
     | { type: 'never' }
@@ -16,7 +17,8 @@ export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'ExternFnDef', decl: ExternFnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
-    | { type: 'Alias', decl: TyAliasDecl, alias: Ty, args: Ty[] });
+    | { type: 'Alias', decl: TyAliasDecl, alias: Ty, args: Ty[] }
+    | { type: 'Enum', decl: AstEnum });
 
 export type TypeFlags = number;
 export const TYPARAM_MASK = 0b01;
@@ -86,7 +88,8 @@ export function ppTy(ty: Ty): string {
         }
         case 'Alias':
             return `${ty.decl.name}<${ty.args.map(ty => ppTy(ty)).join(', ')}>`;
-        case 'Tuple': return `(${ty.elements.map(ppTy).join(', ')})`
+        case 'Tuple': return `(${ty.elements.map(ppTy).join(', ')})`;
+        case 'Enum': return ty.decl.name;
     }
 }
 
@@ -155,6 +158,7 @@ export function instantiateTy(ty: Ty, args: Ty[]): Ty {
 
             return { type: 'Tuple', flags, elements };
         }
+        case 'Enum': return ty;
     }
 }
 

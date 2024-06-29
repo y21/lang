@@ -1,10 +1,12 @@
 import { AstFnSignature, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Program, Stmt, TyAliasDecl } from "./parse";
 import { assertUnreachable } from "./util";
 
+type Scope<T> = Map<string, T>;
+
 class ResNamespace<T> {
     scopes: (Map<string, T>)[] = [];
     add(name: string, value: T) {
-        this.scopes[this.scopes.length - 1].set(name, value);
+        this.current()!.set(name, value);
     }
     find(name: string): T | null {
         for (let i = this.scopes.length - 1; i >= 0; i--) {
@@ -12,6 +14,13 @@ class ResNamespace<T> {
             if (el) return el;
         }
         return null;
+    }
+    current(): Scope<T> | null {
+        if (this.scopes.length === 0) {
+            return null;
+        } else {
+            return this.scopes[this.scopes.length - 1];
+        }
     }
     withScope(f: () => void) {
         this.scopes.push(new Map());
@@ -60,7 +69,7 @@ const INTRINSICS: Intrinsic[] = [
     mkIntrinsic('trunc', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))
 ];
 export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
-export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
+export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy);
 export type TypeResolutions = Map<AstTy, TypeResolution>;
 export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter });
 export type ValueResolutions = Map<Expr, ValueResolution>;
@@ -84,6 +93,18 @@ export function computeResolutions(ast: Program): Resolutions {
         }
         return breakableStack[breakableStack.length - 1];
     }
+
+    // The scope in which the enclosing type alias is defined in.
+    // Normally, when we enter a type alias, we add a new scope, so that generics are only usable within the type alias itself and not outside.
+    //
+    //    type X<T> = /* T can be referred to only in here */;
+    //
+    //    /* T cannot be referred to here */
+    //
+    // This `tyAliasScope` is needed for us to be able to add `enum`s in the same scope where the type alias is defined in
+    // and not restricted to just the type alias.
+    let tyAliasScope: Scope<TypeResolution> | null = null;
+
     let entrypoint: FnDecl | null = null;
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
@@ -95,7 +116,7 @@ export function computeResolutions(ast: Program): Resolutions {
             valRes.withScope(() => {
                 f();
             });
-        })
+        });
     };
 
     const registerRes = <K, T>(nskey: string, mapkey: K, ns: ResNamespace<T>, map: Map<K, T>) => {
@@ -135,9 +156,16 @@ export function computeResolutions(ast: Program): Resolutions {
                 for (const [, v] of ty.fields) resolveTy(v);
                 break;
             case 'Alias':
-                resolveTy(ty.alias); break;
+                resolveTy(ty.alias);
+                break;
             case 'Infer': break;
             case 'Tuple': for (const elem of ty.elements) resolveTy(elem); break;
+            case 'Enum':
+                if (tyAliasScope === null) {
+                    throw new Error('enum types can currently only appear in type aliases');
+                }
+                tyAliasScope.set(ty.name, ty);
+                break;
             default: assertUnreachable(ty);
         }
     }
@@ -163,6 +191,7 @@ export function computeResolutions(ast: Program): Resolutions {
             }
             case 'TyAlias': {
                 tyRes.add(stmt.name, stmt);
+                tyAliasScope = tyRes.current()!;
                 tyRes.withScope(() => {
                     for (let i = 0; i < stmt.generics.length; i++) {
                         tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
@@ -176,6 +205,7 @@ export function computeResolutions(ast: Program): Resolutions {
                         }
                     }
                 });
+                tyAliasScope = null;
                 break;
             }
             default: assertUnreachable(stmt);
