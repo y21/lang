@@ -404,6 +404,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                                 () => {
                                     output += `${arrayLocal} = alloca ${arrayTyS}\n`
                                     output += `${counterLocal} = alloca i32\n`;
+                                    output += `store i32 0, i32* ${counterLocal}\n`;
                                 },
                                 () => {
                                     const loadTemp = `%t.${tempLocal()}`;
