@@ -13,4 +13,4 @@ jobs:
             - name: Compile project
               run: npx tsc
             - name: Run ui tests
-              run: node ui
+              run: node dist/ui

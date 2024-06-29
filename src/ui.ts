@@ -1,4 +1,4 @@
-// UI tests. Run `tsc && node ui` to run the tests in `tests/`
+// UI tests. Run `tsc && node dist/ui` to run the tests in `tests/`
 
 import fs from 'fs/promises';
 import cp from 'child_process';

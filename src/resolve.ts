@@ -1,0 +1,288 @@
+import { AstFnSignature, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Program, Stmt, TyAliasDecl } from "./parse";
+import { assertUnreachable } from "./util";
+
+class ResNamespace<T> {
+    scopes: (Map<string, T>)[] = [];
+    add(name: string, value: T) {
+        this.scopes[this.scopes.length - 1].set(name, value);
+    }
+    find(name: string): T | null {
+        for (let i = this.scopes.length - 1; i >= 0; i--) {
+            const el = this.scopes[i].get(name);
+            if (el) return el;
+        }
+        return null;
+    }
+    withScope(f: () => void) {
+        this.scopes.push(new Map());
+        f();
+        this.scopes.pop();
+    }
+}
+
+export enum PrimitiveTy {
+    Never,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+    Str
+}
+
+export type IntrinsicName = 'bitcast' | 'ext' | 'trunc';
+export type Intrinsic = ({ abi: 'intrinsic' }) & ExternFnDecl;
+
+export function mkIntrinsic(name: IntrinsicName, generics: Generics, parameters: FnParameter[], ret: AstTy): Intrinsic {
+    return {
+        type: 'ExternFnDecl',
+        abi: 'intrinsic',
+        sig: {
+            name: name,
+            generics,
+            parameters,
+            ret,
+        },
+    }
+}
+
+function identPathTy(ident: string): AstTy {
+    return { type: 'Path', value: { segments: [{ args: [], ident }] } };
+}
+
+const INTRINSICS: Intrinsic[] = [
+    mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('ext', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('trunc', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))
+];
+export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
+export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl;
+export type TypeResolutions = Map<AstTy, TypeResolution>;
+export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter });
+export type ValueResolutions = Map<Expr, ValueResolution>;
+export type Resolutions = { tyResolutions: TypeResolutions, valueResolutions: ValueResolutions, entrypoint: FnDecl };
+
+export function computeResolutions(ast: Program): Resolutions {
+    const tyRes = new ResNamespace<TypeResolution>();
+    const valRes = new ResNamespace<ValueResolution>();
+    let entrypoint: FnDecl | null = null;
+
+    const tyMap: Map<AstTy, TypeResolution> = new Map();
+    const identMap: Map<Expr, ValueResolution> = new Map();
+
+    const withAllScopes = (f: () => void) => {
+        tyRes.withScope(() => {
+            valRes.withScope(() => {
+                f();
+            });
+        })
+    };
+
+    const registerRes = <K, T>(nskey: string, mapkey: K, ns: ResNamespace<T>, map: Map<K, T>) => {
+        const res = ns.find(nskey);
+        if (!res) throw `Cannot resolve ${nskey}`;
+        map.set(mapkey, res);
+    };
+
+    function resolveTy(ty: AstTy) {
+        switch (ty.type) {
+            case 'Path': {
+                if (ty.value.segments.length !== 1) {
+                    throw new Error('path must have one segment');
+                }
+                for (const arg of ty.value.segments[0].args) resolveTy(arg.ty);
+
+                const segment = ty.value.segments[0];
+                switch (segment.ident) {
+                    case 'never': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Never }); break;
+                    case 'i8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I8 }); break;
+                    case 'i16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I16 }); break;
+                    case 'i32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I32 }); break;
+                    case 'i64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I64 }); break;
+                    case 'u8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U8 }); break;
+                    case 'u16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U16 }); break;
+                    case 'u32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U32 }); break;
+                    case 'u64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U64 }); break;
+                    case 'bool': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Bool }); break;
+                    case 'str': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Str }); break;
+                    default: registerRes(segment.ident, ty, tyRes, tyMap); break;
+                }
+                break;
+            }
+            case 'Array': resolveTy(ty.elemTy); break;
+            case 'Pointer': resolveTy(ty.pointeeTy); break;
+            case 'Record':
+                for (const [, v] of ty.fields) resolveTy(v);
+                break;
+            case 'Alias':
+                resolveTy(ty.alias); break;
+            case 'Infer': break;
+            case 'Tuple': for (const elem of ty.elements) resolveTy(elem); break;
+            default: assertUnreachable(ty);
+        }
+    }
+
+    function resolveStmt(stmt: Stmt) {
+        switch (stmt.type) {
+            case 'FnDecl': resolveFnDecl(stmt); break;
+            case 'ExternFnDecl': {
+                valRes.add(stmt.sig.name, stmt);
+                withAllScopes(() => {
+                    resolveFnSig(stmt.sig, stmt);
+                });
+                break;
+            }
+            case 'Expr': resolveExpr(stmt.value); break;
+            case 'LetDecl': {
+                valRes.add(stmt.name, stmt);
+                resolveExpr(stmt.init);
+                if (stmt.ty) {
+                    resolveTy(stmt.ty);
+                }
+                break;
+            }
+            case 'TyAlias': {
+                tyRes.add(stmt.name, stmt);
+                tyRes.withScope(() => {
+                    for (let i = 0; i < stmt.generics.length; i++) {
+                        tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
+                    }
+
+                    resolveTy(stmt.alias);
+                    for (const path of stmt.constructibleIn) {
+                        if (path.segments.length !== 1) throw 'wrong segment length';
+                        for (const args of path.segments[0].args) {
+                            resolveTy(args.ty);
+                        }
+                    }
+                });
+                break;
+            }
+            default: assertUnreachable(stmt);
+        }
+    }
+
+    function resolveExpr(expr: Expr) {
+        switch (expr.type) {
+            case 'Literal':
+                registerRes(expr.ident, expr, valRes, identMap);
+                if (expr.args) {
+                    for (const arg of expr.args) resolveTy(arg);
+                }
+                break;
+            case 'Block': for (const stmt of expr.stmts) resolveStmt(stmt); break;
+            case 'Return': resolveExpr(expr.value); break;
+            case 'ArrayLiteral': for (const e of expr.elements) resolveExpr(e); break;
+            case 'ArrayRepeat': resolveExpr(expr.element); break;
+            case 'FnCall': {
+                for (const arg of expr.args) resolveExpr(arg);
+                resolveExpr(expr.callee);
+                break;
+            }
+            case 'Assignment': {
+                resolveExpr(expr.target);
+                resolveExpr(expr.value);
+                break;
+            }
+            case 'Index': {
+                resolveExpr(expr.index);
+                resolveExpr(expr.target);
+                break;
+            }
+            case 'Property': {
+                resolveExpr(expr.target);
+                break;
+            }
+            case 'Number':
+            case 'String':
+            case 'Bool':
+                break;
+            case 'Binary':
+                resolveExpr(expr.lhs);
+                resolveExpr(expr.rhs);
+                break;
+            case 'AddrOf':
+                resolveExpr(expr.pointee);
+                break;
+            case 'Deref':
+                resolveExpr(expr.pointee);
+                break;
+            case 'Record':
+                for (const [, v] of expr.fields) {
+                    resolveExpr(v);
+                }
+                break;
+            case 'If':
+                resolveExpr(expr.condition);
+                resolveExpr(expr.then);
+                if (expr.else) {
+                    resolveExpr(expr.else);
+                }
+                break;
+            case 'While':
+                resolveExpr(expr.body);
+                resolveExpr(expr.condition);
+                break;
+            case 'Unary':
+                resolveExpr(expr.rhs);
+                break;
+            case 'Tuple':
+                for (const element of expr.elements) {
+                    resolveExpr(element);
+                }
+                break;
+            default: assertUnreachable(expr);
+        }
+    }
+
+    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl) {
+        for (let i = 0; i < sig.generics.length; i++) {
+            tyRes.add(sig.generics[i], { type: 'TyParam', id: i, parentItem: item });
+        }
+
+        for (const param of sig.parameters) {
+            valRes.add(param.name, { type: 'FnParam', param });
+            resolveTy(param.ty);
+        }
+
+        if (sig.ret) {
+            resolveTy(sig.ret);
+        }
+    }
+
+    function resolveFnDecl(decl: FnDecl) {
+        if (INTRINSICS.some(ins => ins.sig.name === decl.sig.name)) {
+            throw new Error(`function cannot have name '${decl.sig.name}' because it is the name of an intrinsic`);
+        }
+        valRes.add(decl.sig.name, decl);
+        withAllScopes(() => {
+            resolveFnSig(decl.sig, decl);
+            resolveExpr(decl.body);
+        });
+    }
+
+    valRes.withScope(() => {
+        for (const intrinsic of INTRINSICS) {
+            resolveStmt({ type: 'ExternFnDecl', abi: 'intrinsic', span: [0, 0], sig: intrinsic.sig });
+        }
+
+        tyRes.withScope(() => {
+            for (const stmt of ast.stmts) {
+                if (stmt.type === 'FnDecl' && stmt.sig.name === 'main') {
+                    entrypoint = stmt;
+                }
+                resolveStmt(stmt);
+            }
+        });
+    });
+
+    if (!entrypoint) {
+        throw "'main' function not found";
+    }
+
+    return { tyResolutions: tyMap, valueResolutions: identMap, entrypoint };
+}
