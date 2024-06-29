@@ -2116,7 +2116,7 @@ type MirLocalId<temporary extends boolean = boolean> = number;
 type Projection = { type: 'Field', property: string | number } | { type: 'Deref' };
 type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
 type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
-    | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
+    | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, lhsTy: Ty, rhs: MirValue }
     | { type: 'Unary', op: UnaryOp, assignee: MirLocalId<true>, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOf', assignee: MirLocalId<true>, place: MirPlace }
@@ -2334,10 +2334,11 @@ function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], re
                     return lowerReturnValue(ret);
                 }
                 case 'Binary': {
-                    const lhs = asValue(lowerExpr(expr.lhs), typeck.exprTys.get(expr.lhs)!);
+                    const lhsTy = typeck.exprTys.get(expr.lhs)!;
+                    const lhs = asValue(lowerExpr(expr.lhs), lhsTy);
                     const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
                     const res = addLocal(typeck.exprTys.get(expr)!, true);
-                    block.stmts.push({ type: 'BinOp', assignee: res, lhs, rhs, op: expr.op });
+                    block.stmts.push({ type: 'BinOp', assignee: res, lhs, lhsTy, rhs, op: expr.op });
                     return { type: 'Local', value: res };
                 }
                 case 'Unary': {
@@ -2767,8 +2768,7 @@ function codegen(src: string, ast: Program, res: Resolutions, typeck: TypeckResu
                             break;
                         }
                         case 'BinOp': {
-                            const local = getLocal(stmt.assignee);
-                            let signed = local.ty.type === 'int' && local.ty.value.signed;
+                            let signed = stmt.lhsTy.type === 'int' && stmt.lhsTy.value.signed;
                             let binOp: string;
                             switch (stmt.op) {
                                 case TokenType.Plus: binOp = 'add'; break;
