@@ -127,11 +127,19 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                     case 'Local': return `%l.${val.value}`;
                     case 'int':
                     case 'bool': return val.value.toString();
-                    case 'str':
+                    case 'str': {
+                        // Replace all \n with \0A. Since '\0A' is not 3 characters but 1, we need to adjust the real length also.
+                        let specialCharsReplaced = 0;
+                        const data = val.value.replaceAll('\\n', () => {
+                            specialCharsReplaced += 2;
+                            return '\\0A';
+                        });
+                        const len = data.length - specialCharsReplaced;
                         const ctId = nextConstId();
-                        const ctTy = `[${val.value.length} x i8]`;
-                        constSection += `${ctId} = private constant ${ctTy} c"${val.value}"\n`;
-                        return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${val.value.length}}`;
+                        const ctTy = `[${len} x i8]`;
+                        constSection += `${ctId} = private constant ${ctTy} c"${data}"\n`;
+                        return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${len}}`;
+                    }
                     case 'Unreachable': return 'poison';
                     // At least for now, the variant index has 1:1 mapping to the in-memory representation
                     case 'Variant': return val.variant.toString();
