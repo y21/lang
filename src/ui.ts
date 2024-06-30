@@ -43,7 +43,7 @@ async function processDir(path: string) {
         let filePath = `${path}/${file}`;
         let stdout: string, stderr: string;
         try {
-            const { stdout: out, stderr: err } = await exec(`node . ${filePath} --print-llir-only --no-timings --verbose --no-colors`);
+            const { stdout: out, stderr: err } = await exec(`node . ${filePath} --print-llir-only --verbose --no-colors`);
             stdout = out;
             stderr = err;
         } catch (err: any) {

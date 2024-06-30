@@ -17,7 +17,7 @@ function parseOptions(): CliOptions {
     let optLevel: OptLevel = '-O0';
     let verbose = false;
     let printLlirOnly = false;
-    let timings = true;
+    let timings = false;
     let colors = true;
     const args = process.argv.slice(2).values();
 
@@ -30,7 +30,7 @@ function parseOptions(): CliOptions {
             case '-O0':
             case '-O': optLevel = opt.value; break;
             case '--print-llir-only': printLlirOnly = true; break;
-            case '--no-timings': timings = false; break;
+            case '--timings': timings = true; break;
             case '--verbose': verbose = true; break;
             case '--no-colors': colors = false; break;
             default:
