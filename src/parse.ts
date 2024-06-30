@@ -1,5 +1,5 @@
 import { Span, joinSpan } from "./span";
-import { TokenType } from "./token";
+import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
 
@@ -99,8 +99,17 @@ export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
 export type Associativity = LeftToRight | RightToLeft;
 
-export type Pat = { span: Span } & ({ type: 'Number', value: number }
-    | { type: 'Path', path: Path<AstTy> });
+export type Pat = { span: Span } & (
+    | { type: 'Number', value: number }
+    | { type: 'String', value: string }
+    | { type: 'Path', path: Path<AstTy> }
+    // pat..
+    | { type: 'RangeFrom', from: Pat }
+    // ..pat
+    | { type: 'RangeTo', to: Pat }
+    // pat..pat
+    | { type: 'Range', from: Pat, to: Pat }
+);
 
 export type AstArm = { pat: Pat, body: Expr };
 
@@ -114,8 +123,10 @@ const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
     [TokenType.And]: 15,
     [TokenType.Star]: 15,
     [TokenType.Not]: 15,
+    [TokenType.DotDot]: 7
 };
 
+// Patterns and expressions share the same precedence for symbols in here
 const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     // Fn calls `x()`
     [TokenType.LParen]: 17,
@@ -135,6 +146,8 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     [TokenType.Ge]: 9,
     [TokenType.EqEq]: 8,
     [TokenType.NotEq]: 8,
+    // Ranges
+    [TokenType.DotDot]: 7,
     // Assignment x = y
     [TokenType.Assign]: 2,
     [TokenType.AddAssign]: 2,
@@ -158,6 +171,7 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.Star]: 'ltr',
     [TokenType.Slash]: 'ltr',
     [TokenType.Percent]: 'ltr',
+    [TokenType.DotDot]: 'ltr',
     [TokenType.Not]: 'ltr',
     [TokenType.Lt]: 'ltr',
     [TokenType.Le]: 'ltr',
@@ -194,14 +208,65 @@ export function parse(src: string): Program {
         }
     }
 
-    function parsePat(): Pat {
-        return parseBottomPat();
+    function parseRootPat(): Pat {
+        return parsePat(-1);
+    }
+
+    function parsePat(minPrecedence: number): Pat {
+        let pat: Pat;
+        const unaryStartSpan = tokens[i].span;
+        switch (tokens[i].ty) {
+            case TokenType.LParen: {
+                const innerPat = parseRootPat();
+                // TODO: tuple pattern
+                eatToken(TokenType.RParen);
+                pat = innerPat;
+            }
+            case TokenType.DotDot: {
+                const to = parsePat(UNARY_PRECEDENCE[TokenType.DotDot]!);
+                pat = { type: 'RangeTo', to, span: joinSpan(unaryStartSpan, to.span) };
+                break;
+            }
+            default:
+                pat = parseBottomPat();
+        }
+
+        while (i < tokens.length) {
+            const op = tokens[i];
+            const prec = BINARY_INFIX_PRECEDENCE[op.ty];
+            const assoc = ASSOC[op.ty];
+            if (prec === undefined || assoc === undefined) {
+                return pat;
+            }
+
+            if (minPrecedence >= prec && !(minPrecedence === prec && assoc === 'rtl')) break;
+
+            switch (op.ty) {
+                case TokenType.DotDot: {
+                    i++;
+                    if (tokenCanContinuePattern(tokens[i].ty)) {
+                        // full range
+                        const to = parsePat(prec);
+                        pat = { type: 'Range', from: pat, to, span: joinSpan(pat.span, to.span) };
+                    } else {
+                        // fromRange..
+                        pat = { type: 'RangeFrom', from: pat, span: joinSpan(pat.span, op.span) };
+                    }
+                    break;
+                }
+                default: throw `Unknown binary/infix operator for pattern: ${op}`;
+            }
+        }
+
+        return pat;
     }
 
     function parseBottomPat(): Pat {
-        const expr = parseRootExpr();
+        // NOTE: keep token.ts/tokenCanContinuePattern in sync with this
+        const expr = parseBottomExpr();
         switch (expr.type) {
             case 'Number': return { type: 'Number', value: expr.value, span: expr.span };
+            case 'String': return { type: 'String', value: expr.value, span: expr.span };
             case 'Path': return { type: 'Path', path: expr.path, span: expr.span };
             default: throw new Error(`${expr.type} cannot be used in pattern position`);
         }
@@ -436,7 +501,7 @@ export function parse(src: string): Program {
                             eatToken(TokenType.Comma);
                         }
                     }
-                    const pat = parsePat();
+                    const pat = parseRootPat();
                     eatToken(TokenType.FatArrow);
                     const body = parseRootExpr();
                     arms.push({ pat, body });
@@ -600,7 +665,7 @@ export function parse(src: string): Program {
                     expr = { type: 'Index', index, span: joinSpan(expr.span, tokens[i - 1].span), target: expr };
                     break;
                 }
-                default: throw `Unhandled binary/infix operator ${op}`
+                default: throw `Unknown binary/infix operator for expression: ${op}`;
             }
         }
 

@@ -1,0 +1,93 @@
+expr @ 2:11 2:17 => str*
+expr @ 3:19 4:0 => ()
+expr @ 4:18 5:0 => ()
+expr @ 5:17 6:0 => ()
+expr @ 6:18 7:0 => ()
+expr @ 2:5 7:6 => ()
+expr @ 1:11 9:1 => ()
+
+define i1 @$builtins$starts_with({i8*, i64} %hay, {i8*, i64} %needle) {
+start:
+    %hay.ptr = extractvalue {i8*, i64} %hay, 0
+    %hay.len = extractvalue {i8*, i64} %hay, 1
+    %needle.ptr = extractvalue {i8*, i64} %needle, 0
+    %needle.len = extractvalue {i8*, i64} %needle, 1
+    %lt = icmp ult i64 %hay.len, %needle.len
+    br i1 %lt, label %bb.false, label %loop.header
+
+bb.false:
+    ret i1 false
+
+bb.true:
+    ret i1 true
+
+loop.header:
+    %index = phi i64 [0, %start], [%next_index, %loop.samebyte]
+    %lt.2 = icmp ult i64 %index, %needle.len
+    br i1 %lt.2, label %loop.body, label %bb.true
+
+loop.body:
+    %hayelementptr = getelementptr i8, i8* %hay.ptr, i64 %index
+    %needleelementptr = getelementptr i8, i8* %needle.ptr, i64 %index
+
+    %hayelement = load i8, i8* %hayelementptr
+    %needleelement = load i8, i8* %needleelementptr
+
+    %samebyte = icmp eq i8 %hayelement, %needleelement
+    br i1 %samebyte, label %loop.samebyte, label %bb.false
+
+loop.samebyte:
+    %next_index = add i64 %index, 1
+    br label %loop.header
+}
+
+@ct.0 = private constant [4 x i8] c"test"
+@ct.1 = private constant [2 x i8] c"te"
+@ct.2 = private constant [4 x i8] c"test"
+@ct.3 = private constant [1 x i8] c"t"
+@ct.4 = private constant [4 x i8] c"test"
+@ct.5 = private constant [0 x i8] c""
+@ct.6 = private constant [4 x i8] c"test"
+
+define void @main() {
+prologue:
+%l.3 = alloca {i8*, i64}
+br label %bb.0
+
+bb.0:
+br label %bb.1
+
+bb.1:
+%l.0 = call i1 @$builtins$starts_with({i8*, i64} {i8* bitcast([4 x i8]* @ct.0 to i8*), i64 4}, {i8*, i64} {i8* bitcast([2 x i8]* @ct.1 to i8*), i64 2})
+br i1 %l.0, label %bb.5, label %bb.2
+
+bb.2:
+%l.1 = call i1 @$builtins$starts_with({i8*, i64} {i8* bitcast([4 x i8]* @ct.2 to i8*), i64 4}, {i8*, i64} {i8* bitcast([1 x i8]* @ct.3 to i8*), i64 1})
+br i1 %l.1, label %bb.6, label %bb.3
+
+bb.3:
+%l.2 = call i1 @$builtins$starts_with({i8*, i64} {i8* bitcast([4 x i8]* @ct.4 to i8*), i64 4}, {i8*, i64} {i8* bitcast([0 x i8]* @ct.5 to i8*), i64 0})
+br i1 %l.2, label %bb.7, label %bb.4
+
+bb.4:
+br label %bb.8
+
+bb.5:
+br label %bb.9
+
+bb.6:
+br label %bb.9
+
+bb.7:
+br label %bb.9
+
+bb.8:
+store {i8*, i64} {i8* bitcast([4 x i8]* @ct.6 to i8*), i64 4}, {i8*, i64}* %l.3
+br label %bb.9
+
+bb.9:
+ret void
+
+}
+
+

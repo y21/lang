@@ -1,7 +1,7 @@
 import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Pat } from "./parse";
 import { BindingPat, Resolutions } from "./resolve";
 import { TokenType } from "./token";
-import { IntTy, Ty, instantiateTy, isUnit, BOOL, ppTy } from "./ty";
+import { IntTy, Ty, instantiateTy, isUnit, BOOL } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert, todo } from "./util";
 
@@ -35,7 +35,8 @@ export type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue 
     | { type: 'Ext', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
     | { type: 'Trunc', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
     | { type: 'InitArrayLit', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, values: MirValue[] }
-    | { type: 'InitArrayRepeat', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, value: MirValue, count: number };
+    | { type: 'InitArrayRepeat', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, value: MirValue, count: number }
+    | { type: 'StrStartsWith', assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue };
 export type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
     | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
@@ -504,8 +505,57 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         // Compile the check branch
                         block = blocks[checkBranch];
 
+                        const mkBinOp = (lhs: MirValue, rhs: MirValue, op: BinaryOp, lhsTy: Ty): { type: 'Local' } & MirValue => {
+                            const binOpRes = addLocal(BOOL, true);
+                            block.stmts.push({
+                                type: 'BinOp',
+                                assignee: binOpRes,
+                                lhs,
+                                rhs,
+                                lhsTy,
+                                op
+                            });
+                            return { type: 'Local', value: binOpRes };
+                        }
+
+                        const nextCheckBlock = () => {
+                            if (i === checkBranches.length - 1) {
+                                // A fallible pattern cannot be the last arm (currently; until we have exhaustive checking)
+                                throw new Error(`no check block to jump to if arm ${i} fails`);
+                            }
+                            return checkBranches[i + 1];
+                        }
+
+                        const mkScrutineeBinOp = (rhs: MirValue) => {
+                            const binOpRes = mkBinOp(asValue(scrutinee, scrutineeTy), rhs, TokenType.EqEq, scrutineeTy)
+                            block.terminator = { type: 'Conditional', condition: { type: 'Local', value: binOpRes.value }, then: bodyBranch, else: nextCheckBlock() };
+                        };
+
                         switch (arm.pat.type) {
-                            case 'Number': todo('lower number pattern');
+                            case 'Number': {
+                                if (scrutineeTy.type !== 'int') {
+                                    throw new Error('scrutinee is not an integer');
+                                }
+                                mkScrutineeBinOp({ type: 'int', ity: scrutineeTy.value, value: arm.pat.value });
+                                break;
+                            }
+                            case 'RangeFrom': {
+                                const from = arm.pat.from;
+                                if (from.type !== 'String') {
+                                    todo('lower ' + from.type);
+                                }
+
+                                const startsWithRes = addLocal(BOOL, true);
+                                block.stmts.push({
+                                    type: 'StrStartsWith',
+                                    lhs: asValue(scrutinee, scrutineeTy),
+                                    assignee: startsWithRes,
+                                    rhs: { type: 'str', value: from.value }
+                                });
+
+                                block.terminator = { type: 'Conditional', condition: { type: 'Local', value: startsWithRes }, then: bodyBranch, else: nextCheckBlock() };
+                                break;
+                            }
                             case 'Path': {
                                 const res = resolutions.patResolutions.get(arm.pat)!;
                                 switch (res.type) {
@@ -514,27 +564,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                         block.terminator = { type: 'Jump', target: bodyBranch };
                                         break;
                                     case 'Variant': {
-                                        if (i === checkBranches.length - 1) {
-                                            // A variant pattern cannot be the last arm (currently; until we have exhaustive checking)
-                                            throw new Error(`no check block to jump to if arm ${i} fails`);
-                                        }
-                                        const binOpRes = addLocal(BOOL, true);
-                                        block.stmts.push({
-                                            type: 'BinOp',
-                                            assignee: binOpRes,
-                                            // Forcing a value is fine because it's just an int
-                                            lhs: asValue(scrutinee, scrutineeTy),
-                                            rhs: { type: 'Variant', enum: res.enum, variant: res.variant },
-                                            lhsTy: scrutineeTy,
-                                            op: TokenType.EqEq
-                                        });
-                                        block.terminator = { type: 'Conditional', condition: { type: 'Local', value: binOpRes }, then: bodyBranch, else: checkBranches[i + 1] };
+                                        mkScrutineeBinOp({ type: 'Variant', enum: res.enum, variant: res.variant });
                                         break;
                                     }
                                 }
                                 break;
                             }
-                            default: assertUnreachable(arm.pat)
+                            default: todo(arm.pat.type)
                         }
 
                         // Compile the body branch

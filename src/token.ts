@@ -45,6 +45,7 @@ export enum TokenType {
     Star,
     Slash,
     Percent,
+    DotDot,
     Dot,
     Lt,
     Le,
@@ -57,4 +58,17 @@ export enum TokenType {
 export interface Token {
     ty: TokenType;
     span: Span;
+}
+
+
+export function tokenCanContinuePattern(ty: TokenType): boolean {
+    switch (ty) {
+        case TokenType.Number:
+        case TokenType.String:
+        case TokenType.Ident:
+        case TokenType.DotDot:
+            return true;
+        default:
+            return false;
+    }
 }

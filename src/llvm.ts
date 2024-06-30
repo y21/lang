@@ -10,6 +10,7 @@
 // we never codegen functions that are never called. However, dependants of the library might call it, so we must have
 // compiled it.
 
+import { readFileSync } from "fs";
 import { mangleInstFn } from "./mangle";
 import { MirBody, MirLocal, MirLocalId, MirPlace, MirValue, astToMir } from "./mir";
 import { AstEnum, FnDecl } from "./parse";
@@ -27,6 +28,12 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
         if (!_externDeclarations.has(name)) {
             _externDeclarations.add(name);
             declareSection += mkSig();
+        }
+    };
+    const builtinFns = {
+        strStartsWith: () => {
+            addExternDecl('$builtins$starts_with', () => readFileSync('src/builtins/startsWith.ll', 'utf-8'));
+            return '$builtins$starts_with';
         }
     };
     let fnSection = '';
@@ -455,6 +462,13 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                                 output += `store ${valTyS} ${val}, ${valTyS}* ${ptrLocal}\n`;
                             }
                             output += `%l.${stmt.assignee} = load ${arrayTyS}, ${arrayTyS}* ${arrayLocal}\n`;
+                            break;
+                        }
+                        case 'StrStartsWith': {
+                            const startsWith = builtinFns.strStartsWith();
+                            const lhs = compileValueToLocal(stmt.lhs);
+                            const rhs = compileValueToLocal(stmt.rhs);
+                            output += `%l.${stmt.assignee} = call i1 @${startsWith}(${llValTy(mir, stmt.lhs)} ${lhs}, ${llValTy(mir, stmt.rhs)} ${rhs})\n`;
                             break;
                         }
                         default: assertUnreachable(stmt);

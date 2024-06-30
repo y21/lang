@@ -24,14 +24,14 @@ store i8 0, i8* %l.1
 br label %bb.1
 
 bb.1:
-%l.3 = load i8, i8* %l.1
-%l.2 = icmp eq i8 %l.3, 0
-br i1 %l.2, label %bb.4, label %bb.2
+%l.2 = load i8, i8* %l.1
+%l.3 = icmp eq i8 %l.2, 0
+br i1 %l.3, label %bb.4, label %bb.2
 
 bb.2:
-%l.5 = load i8, i8* %l.1
-%l.4 = icmp eq i8 %l.5, 1
-br i1 %l.4, label %bb.5, label %bb.3
+%l.4 = load i8, i8* %l.1
+%l.5 = icmp eq i8 %l.4, 1
+br i1 %l.5, label %bb.5, label %bb.3
 
 bb.3:
 br label %bb.6

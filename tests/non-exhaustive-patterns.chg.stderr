@@ -1,6 +1,6 @@
 
-                                            throw new Error(`no check block to jump to if arm ${i} fails`);
-                                            ^
+                                throw new Error(`no check block to jump to if arm ${i} fails`);
+                                ^
 
 Error: no check block to jump to if arm 1 fails
 

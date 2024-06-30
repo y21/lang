@@ -3,8 +3,8 @@ import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, 
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32 } from "./ty";
-import { assert, assertUnreachable } from "./util";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE } from "./ty";
+import { assert, assertUnreachable, todo } from "./util";
 import { forEachExprInStmt } from "./visit";
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
@@ -256,6 +256,16 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
     function typeckPat(pat: Pat): Ty {
         switch (pat.type) {
             case 'Number': return I32;
+            case 'RangeFrom':
+            case 'RangeTo': {
+                const operand = pat.type === 'RangeFrom' ? pat.from : pat.to;
+                if (operand.type !== 'String') {
+                    todo('RangeFrom/RangeTo for non-strings')
+                }
+                return STR_SLICE;
+            }
+            case 'String': return STR_SLICE;
+            case 'Range': todo('range');
             case 'Path': {
                 const pathres = res.patResolutions.get(pat);
                 if (pathres) {
@@ -326,7 +336,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 // TODO: typescript's "as const" can create a literal type?
                 case 'Number': return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
                 case 'Bool': return BOOL;
-                case 'String': return { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'str', flags: EMPTY_FLAGS } };
+                case 'String': return STR_SLICE;
                 case 'Binary': {
                     const lhsTy = typeckExpr(expr.lhs);
                     const rhsTy = typeckExpr(expr.rhs);

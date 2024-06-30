@@ -59,7 +59,14 @@ export function tokenize(src: string): Token[] {
                 i += hi - 1;
                 break;
             case ';': tokens.push({ span: [start, i + 1], ty: TokenType.Semi }); break;
-            case '.': tokens.push({ span: [start, i + 1], ty: TokenType.Dot }); break;
+            case '.':
+                if (src[i + 1] === '.') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.DotDot });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Dot });
+                }
+                break;
             case '<':
                 if (src[i + 1] === '=') {
                     tokens.push({ span: [start, i + 2], ty: TokenType.Le });
