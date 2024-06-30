@@ -52,7 +52,9 @@ export enum TokenType {
     Gt,
     Ge,
     And,
+    AndAnd,
     Or,
+    OrOr,
     ByteChar
 }
 

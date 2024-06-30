@@ -1,3 +1,4 @@
-fn main(): u8 {
-    return b'A' + b'\n';
+fn main(): bool {
+    let c = b'A' + b'\n';
+    return (c == 10u8 || c == 32u8) && c != b'F';
 }

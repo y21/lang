@@ -84,6 +84,14 @@ export function tokenize(src: string): Token[] {
                 }
                 break;
             case ',': tokens.push({ span: [start, i + 1], ty: TokenType.Comma }); break;
+            case '|':
+                if (src[i + 1] === '|') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.OrOr });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.Or });
+                }
+                break;
             case '+':
                 if (src[i + 1] === '=') {
                     tokens.push({ span: [start, i + 2], ty: TokenType.AddAssign });
@@ -108,7 +116,14 @@ export function tokenize(src: string): Token[] {
                     tokens.push({ span: [start, i + 1], ty: TokenType.Star });
                 }
                 break;
-            case '&': tokens.push({ span: [start, i + 1], ty: TokenType.And }); break;
+            case '&':
+                if (src[i + 1] === '&') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.AndAnd });
+                    i++;
+                } else {
+                    tokens.push({ span: [start, i + 1], ty: TokenType.And });
+                }
+                break;
             case '/': {
                 if (src[i + 1] === '/') {
                     while (i < src.length && src[i] !== '\n') i++;

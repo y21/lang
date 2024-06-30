@@ -350,6 +350,12 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             expectedRhsTy = lhsTy;
                             resultTy = BOOL;
                             break;
+                        case TokenType.AndAnd:
+                        case TokenType.OrOr:
+                            expectedLhsTy = rhsTy;
+                            expectedRhsTy = lhsTy;
+                            resultTy = BOOL;
+                            break;
                         default: assertUnreachable(expr);
                     }
                     infcx.sub('Binary', expr.lhs.span, lhsTy, expectedLhsTy);

@@ -15,7 +15,9 @@ export type BinaryOp =
     | TokenType.Le
     | TokenType.Gt
     | TokenType.Ge
-    | TokenType.Percent;
+    | TokenType.Percent
+    | TokenType.AndAnd
+    | TokenType.OrOr;
 
 export type UnaryOp = TokenType.Not;
 
@@ -150,6 +152,8 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     [TokenType.NotEq]: 8,
     // Ranges
     [TokenType.DotDot]: 7,
+    [TokenType.AndAnd]: 6,
+    [TokenType.OrOr]: 5,
     // Assignment x = y
     [TokenType.Assign]: 2,
     [TokenType.AddAssign]: 2,
@@ -181,6 +185,8 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.Ge]: 'ltr',
     [TokenType.EqEq]: 'ltr',
     [TokenType.NotEq]: 'ltr',
+    [TokenType.AndAnd]: 'ltr',
+    [TokenType.OrOr]: 'ltr',
 };
 
 export function parse(src: string): Program {
@@ -677,7 +683,9 @@ export function parse(src: string): Program {
                 case TokenType.Gt:
                 case TokenType.Ge:
                 case TokenType.Slash:
-                case TokenType.Percent: {
+                case TokenType.Percent:
+                case TokenType.AndAnd:
+                case TokenType.OrOr: {
                     const rhs = parseExpr(prec);
                     expr = { type: 'Binary', op: op.ty, lhs: expr, rhs, span: joinSpan(expr.span, rhs.span) };
                     break;

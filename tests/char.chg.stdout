@@ -1,21 +1,66 @@
-expr @ 2:12 2:16 => u8
-expr @ 2:19 2:24 => u8
-expr @ 2:12 2:24 => u8
-expr @ 2:5 2:24 => never
-expr @ 1:15 4:1 => ()
+expr @ 2:13 2:17 => u8
+expr @ 2:20 2:25 => u8
+expr @ 2:13 2:25 => u8
+expr @ 3:13 3:14 => u8
+expr @ 3:18 3:20 => u8
+expr @ 3:13 3:20 => bool
+expr @ 3:26 3:27 => u8
+expr @ 3:31 3:33 => u8
+expr @ 3:26 3:33 => bool
+expr @ 3:13 3:33 => bool
+expr @ 3:40 3:41 => u8
+expr @ 3:45 3:49 => u8
+expr @ 3:40 3:49 => bool
+expr @ 3:13 3:49 => bool
+expr @ 3:5 3:49 => never
+expr @ 1:17 5:1 => ()
 
 
 
-define i8 @main() {
+define i1 @main() {
 prologue:
-%l.0 = alloca i8
+%l.0 = alloca i1
+%l.1 = alloca i8
+%l.7 = alloca i1
+%l.11 = alloca i1
 br label %bb.0
 
 bb.0:
-%l.1 = add i8 65, 10
-store i8 %l.1, i8* %l.0
-%ret.0 = load i8, i8* %l.0
-ret i8 %ret.0
+%l.2 = add i8 65, 10
+store i8 %l.2, i8* %l.1
+%l.3 = load i8, i8* %l.1
+%l.4 = icmp eq i8 %l.3, 10
+%l.5 = load i8, i8* %l.1
+%l.6 = icmp eq i8 %l.5, 32
+br i1 %l.4, label %bb.1, label %bb.2
+
+bb.1:
+store i1 true, i1* %l.7
+br label %bb.3
+
+bb.2:
+store i1 %l.6, i1* %l.7
+br label %bb.3
+
+bb.3:
+%l.8 = load i1, i1* %l.7
+%l.9 = load i8, i8* %l.1
+%l.10 = icmp ne i8 %l.9, 70
+br i1 %l.8, label %bb.5, label %bb.4
+
+bb.4:
+store i1 false, i1* %l.11
+br label %bb.6
+
+bb.5:
+store i1 %l.10, i1* %l.11
+br label %bb.6
+
+bb.6:
+%l.12 = load i1, i1* %l.11
+store i1 %l.12, i1* %l.0
+%ret.0 = load i1, i1* %l.0
+ret i1 %ret.0
 
 }
 

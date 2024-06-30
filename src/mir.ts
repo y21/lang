@@ -26,8 +26,9 @@ export type MirLocal<temporary extends boolean = boolean> = { ty: Ty, temporary:
 export type MirLocalId<temporary extends boolean = boolean> = number;
 export type Projection = { type: 'Field', property: string | number } | { type: 'Index', index: MirValue } | { type: 'Deref' };
 export type MirPlace<temporary extends boolean = boolean> = { base: MirLocalId<temporary>, projections: Projection[] };
+export type MirBinOp = Exclude<BinaryOp, TokenType.AndAnd | TokenType.OrOr>;
 export type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue }
-    | { type: 'BinOp', op: BinaryOp, assignee: MirLocalId<true>, lhs: MirValue, lhsTy: Ty, rhs: MirValue }
+    | { type: 'BinOp', op: MirBinOp, assignee: MirLocalId<true>, lhs: MirValue, lhsTy: Ty, rhs: MirValue }
     | { type: 'Unary', op: UnaryOp, assignee: MirLocalId<true>, rhs: MirValue }
     | { type: 'Copy', assignee: MirLocalId<true>, place: MirPlace }
     | { type: 'AddrOf', assignee: MirLocalId<true>, place: MirPlace }
@@ -93,6 +94,19 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
             }
         ];
         let block = blocks[0];
+
+        const mkBinOp = (lhs: MirValue, rhs: MirValue, op: MirBinOp, lhsTy: Ty): { type: 'Local' } & MirValue => {
+            const binOpRes = addLocal(BOOL, true);
+            block.stmts.push({
+                type: 'BinOp',
+                assignee: binOpRes,
+                lhs,
+                rhs,
+                lhsTy,
+                op
+            });
+            return { type: 'Local', value: binOpRes };
+        }
 
         const parameters = [];
         for (const param of decl.sig.parameters) {
@@ -201,9 +215,72 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const lhsTy = typeck.exprTys.get(expr.lhs)!;
                     const lhs = asValue(lowerExpr(expr.lhs), lhsTy);
                     const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
-                    const res = addLocal(typeck.exprTys.get(expr)!, true);
-                    block.stmts.push({ type: 'BinOp', assignee: res, lhs, lhsTy, rhs, op: expr.op });
-                    return { type: 'Local', value: res };
+                    switch (expr.op) {
+                        case TokenType.AndAnd:
+                        case TokenType.OrOr: {
+                            const res = addLocal(BOOL, false);
+                            const resPlace: MirPlace = { base: res, projections: [] };
+                            // TODO: simplify simple v && x with no side effects as v & x
+                            // TODO 2: do we want a phi instruction in the mir to help LLVM? it can be used here
+
+                            // lhs && rhs:
+                            //
+                            // br i1 _lhs, label %rhs, label %lhs.false
+                            //
+                            // rhs:
+                            // _res = _rhs
+                            // br label %join
+                            //
+                            // lhs.false:
+                            // _res = false
+                            // br label %join
+
+                            // lhs || rhs
+                            // br i1 _lhs, label %lhs.true, label %rhs
+
+                            const lhsBlock = addBlock();
+                            const rhsBlock = addBlock();
+                            const joinBlock = addBlock();
+
+                            block.terminator = {
+                                type: 'Conditional',
+                                condition: lhs,
+                                then: expr.op === TokenType.AndAnd ? rhsBlock : lhsBlock,
+                                else: expr.op === TokenType.AndAnd ? lhsBlock : rhsBlock,
+                            };
+
+                            block = blocks[rhsBlock];
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee: resPlace,
+                                value: rhs
+                            });
+                            block.terminator = { type: 'Jump', target: joinBlock };
+
+                            block = blocks[lhsBlock];
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee: resPlace,
+                                value: { type: 'bool', value: expr.op !== TokenType.AndAnd }
+                            });
+                            block.terminator = { type: 'Jump', target: joinBlock };
+
+                            block = blocks[joinBlock];
+                            const copyRes = addLocal(BOOL, true);
+                            block.stmts.push({
+                                type: 'Copy',
+                                place: resPlace,
+                                assignee: copyRes
+                            });
+                            return { type: 'Local', value: copyRes };
+                        }
+                        default: {
+                            const res = addLocal(typeck.exprTys.get(expr)!, true);
+                            block.stmts.push({ type: 'BinOp', assignee: res, lhs, lhsTy, rhs, op: expr.op });
+                            return { type: 'Local', value: res };
+                        }
+                    }
+                    todo();
                 }
                 case 'Unary': {
                     const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
@@ -507,19 +584,6 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
 
                         // Compile the check branch
                         block = blocks[checkBranch];
-
-                        const mkBinOp = (lhs: MirValue, rhs: MirValue, op: BinaryOp, lhsTy: Ty): { type: 'Local' } & MirValue => {
-                            const binOpRes = addLocal(BOOL, true);
-                            block.stmts.push({
-                                type: 'BinOp',
-                                assignee: binOpRes,
-                                lhs,
-                                rhs,
-                                lhsTy,
-                                op
-                            });
-                            return { type: 'Local', value: binOpRes };
-                        }
 
                         const nextCheckBlock = () => {
                             if (i === checkBranches.length - 1) {
