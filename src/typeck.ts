@@ -3,7 +3,7 @@ import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, 
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE } from "./ty";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8 } from "./ty";
 import { assert, assertUnreachable, todo } from "./util";
 import { visitInStmt } from "./visit";
 
@@ -320,6 +320,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 }
                 // TODO: typescript's "as const" can create a literal type?
                 case 'Number': return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
+                case 'ByteCharacter': return U8;
                 case 'Bool': return BOOL;
                 case 'String': return STR_SLICE;
                 case 'Binary': {

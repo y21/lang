@@ -1,7 +1,7 @@
 import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Pat } from "./parse";
 import { BindingPat, Resolutions } from "./resolve";
 import { TokenType } from "./token";
-import { IntTy, Ty, instantiateTy, isUnit, BOOL } from "./ty";
+import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8 } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert, todo } from "./util";
 
@@ -171,6 +171,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
         function lowerExpr(expr: Expr): LowerExprResult {
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
+                case 'ByteCharacter': return { type: 'int', ity: U8.value, value: expr.value.charCodeAt(0) };
                 case 'String': return { type: 'str', value: expr.value };
                 case 'Path': {
                     const resolution = resolutions.valueResolutions.get(expr)!;

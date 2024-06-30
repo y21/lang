@@ -40,18 +40,18 @@ export function removeTyVid(ty: Ty): Ty {
     ty.flags &= ~TYVID_MASK;
     return ty;
 }
-export const I8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
-export const U8_PTR: Ty = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'int', value: { bits: 8, signed: false }, flags: EMPTY_FLAGS } };
-export const I16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
-export const I32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
-export const I64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
-export const U8: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
-export const U16: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
-export const U32: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
-export const U64: Ty = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
-export const UNIT: Ty = { type: 'Tuple', flags: EMPTY_FLAGS, elements: [] };
-export const BOOL: Ty = { type: 'bool', flags: EMPTY_FLAGS };
-export const STR_SLICE: Ty = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'str', flags: EMPTY_FLAGS } };
+export const I8: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
+export const U8_PTR: Ty & { type: 'Pointer' } = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'int', value: { bits: 8, signed: false }, flags: EMPTY_FLAGS } };
+export const I16: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
+export const I32: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
+export const I64: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
+export const U8: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
+export const U16: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
+export const U32: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
+export const U64: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
+export const UNIT: Ty & { type: 'Tuple' } = { type: 'Tuple', flags: EMPTY_FLAGS, elements: [] };
+export const BOOL: Ty & { type: 'bool' } = { type: 'bool', flags: EMPTY_FLAGS };
+export const STR_SLICE: Ty & { type: 'Pointer' } = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'str', flags: EMPTY_FLAGS } };
 
 export function isUnit(ty: Ty): boolean {
     return ty.type === 'Tuple' && ty.elements.length === 0;

@@ -126,7 +126,14 @@ export function tokenize(src: string): Token[] {
                 tokens.push({ span: [start, i + 1], ty: TokenType.String });
                 break;
             default:
-                if (isAlphaStart(src[i])) {
+                if (src[i] === 'b' && src[i + 1] === '\'') {
+                    const startPos = i;
+                    // usually byte character lines are only going to be one byte, but \n is two in the source code, so use a loop here.
+                    // we don't do any parsing or validation here and leave that to the parser
+                    i += 2;
+                    while (src[i] !== '\'') { i++; }
+                    tokens.push({ ty: TokenType.ByteChar, span: [startPos, i + 1] });
+                } else if (isAlphaStart(src[i])) {
                     let ident = '';
                     while (isAlpha(src[i])) ident += src[i++];
                     let span: Span = [start, i];

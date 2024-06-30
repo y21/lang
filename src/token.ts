@@ -53,6 +53,7 @@ export enum TokenType {
     Ge,
     And,
     Or,
+    ByteChar
 }
 
 export interface Token {

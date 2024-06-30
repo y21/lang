@@ -1,0 +1,22 @@
+expr @ 2:12 2:16 => u8
+expr @ 2:19 2:24 => u8
+expr @ 2:12 2:24 => u8
+expr @ 2:5 2:24 => never
+expr @ 1:15 4:1 => ()
+
+
+
+define i8 @main() {
+prologue:
+%l.0 = alloca i8
+br label %bb.0
+
+bb.0:
+%l.1 = add i8 65, 10
+store i8 %l.1, i8* %l.0
+%ret.0 = load i8, i8* %l.0
+ret i8 %ret.0
+
+}
+
+

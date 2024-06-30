@@ -297,6 +297,7 @@ export function computeResolutions(ast: Program): Resolutions {
             case 'Number':
             case 'String':
             case 'Bool':
+            case 'ByteCharacter':
                 break;
             case 'Binary':
                 resolveExpr(expr.lhs);

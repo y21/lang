@@ -1,3 +1,4 @@
+import { assert } from "console";
 import { Span, joinSpan } from "./span";
 import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
@@ -35,6 +36,7 @@ export type Expr = { span: Span } & (
     | { type: "Number"; value: number; suffix: IntTy }
     | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
+    | { type: 'ByteCharacter', value: string }
     | { type: "Assignment"; op: AssignmentKind, target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string | number }
     | { type: "Return"; value: Expr }
@@ -508,6 +510,27 @@ export function parse(src: string): Program {
                 }
 
                 return { type: 'Match', span: joinSpan(startSpan, tokens[i - 1].span), scrutinee, arms };
+            }
+            case TokenType.ByteChar: {
+                let char = snip(tokens[i].span).slice(2, -1);
+                // Rewrite escapes, e.g. \n into a literal newline
+                if (char[0] === '\\') {
+                    switch (char[1]) {
+                        case 'n':
+                            if (char.length > 2) {
+                                throw new Error('byte char literal can only contain one byte');
+                            }
+                            char = '\n';
+                            break;
+                        default: throw new Error('unknown escape sequence: ' + char[1]);
+                    }
+                } else if (char.length > 1) {
+                    throw new Error('byte char literal can only contain one byte');
+                }
+                assert(char.length === 1, 'multibyte byte char literal after rewrite?');
+
+                expr = { type: 'ByteCharacter', span: tokens[i].span, value: char };
+                break;
             }
             default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
         }
