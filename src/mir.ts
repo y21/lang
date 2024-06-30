@@ -1,9 +1,9 @@
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AssignmentKind } from "./parse";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId } from "./parse";
 import { Resolutions } from "./resolve";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, ppTy } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
-import { assertUnreachable, assert } from "./util";
+import { assertUnreachable, assert, todo } from "./util";
 
 export type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'bool', value: boolean }
@@ -13,7 +13,8 @@ export type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'FnDef', value: FnDecl }
     | { type: 'ExternFnDef', value: ExternFnDecl }
     | { type: 'Record', value: RecordFields<MirValue> }
-    | { type: 'Tuple', value: MirValue[] };
+    | { type: 'Tuple', value: MirValue[] }
+    | { type: 'Variant', enum: AstEnum, variant: VariantId };
 
 export const UNIT_MIR: MirValue = { type: 'Tuple', value: [] };
 
@@ -168,7 +169,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
             switch (expr.type) {
                 case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
                 case 'String': return { type: 'str', value: expr.value };
-                case 'Literal': {
+                case 'Path': {
                     const resolution = resolutions.valueResolutions.get(expr)!;
                     switch (resolution.type) {
                         case 'FnDecl': {
@@ -183,6 +184,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             return { type: 'Place', base: id, projections: [] };
                         }
                         case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
+                        case 'Variant': return { type: 'Variant', enum: resolution.enum, variant: resolution.variant };
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -285,7 +287,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const sig = instantiateFnSig(typeck.instantiatedFnSigs.get(expr)!, args);
 
                     // calls to intrinsics are special cased
-                    if (expr.callee.type === 'Literal') {
+                    if (expr.callee.type === 'Path') {
                         const res = resolutions.valueResolutions.get(expr.callee)!;
                         if (res.type === 'ExternFnDecl' && res.abi === 'intrinsic') {
                             const transmutableIntrinsic = (type: 'Bitcast' | 'Ext' | 'Trunc'): LowerExprResult => {

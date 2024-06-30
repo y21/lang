@@ -1,0 +1,7 @@
+type Unnested = enum { A, B, C };
+type Nested = { v: enum NestedKind { A, B, C } };
+
+fn main() {
+    let x = [Unnested::A, Unnested::B];
+    let y: Nested[2] = [.{ v: NestedKind::A }, .{ v: NestedKind::B }];
+}

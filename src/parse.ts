@@ -27,7 +27,7 @@ export type AssignmentKind = TokenType.Assign
 
 export type Expr = { span: Span } & (
     | { type: "Block"; stmts: Stmt[] }
-    | { type: "Literal"; ident: string, args: AstTy[] | null }
+    | { type: "Path"; path: Path<AstTy> }
     | { type: "FnCall"; args: Expr[]; callee: Expr }
     | { type: "Index"; target: Expr; index: Expr }
     | { type: "ArrayLiteral"; elements: Expr[] }
@@ -84,6 +84,7 @@ export type Mutability = 'imm' | 'mut';
 export type RecordFields<Ty> = ([string, Ty])[];
 export type AstVariant = { name: string };
 export type AstEnum = { type: 'Enum', name: string, variants: AstVariant[] };
+export type VariantId = number;
 export type AstTy = { type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
     | { type: 'Tuple', elements: AstTy[] }
@@ -256,8 +257,8 @@ export function parse(src: string): Program {
                 let name: string | null = null;
                 if (tokens[i].ty === TokenType.Ident) {
                     name = snip(tokens[i++].span);
-                } else if (aliasTyName !== null) {
-                    name = aliasTyName;
+                } else if (enclosingAlias !== null) {
+                    name = enclosingAlias;
                 } else {
                     throw new Error('anonymous enum must be a direct alias');
                 }
@@ -320,21 +321,42 @@ export function parse(src: string): Program {
             }
             case TokenType.String: expr = { type: 'String', span: tokens[i].span, value: snip([tokens[i].span[0] + 1, tokens[i].span[1] - 1]) }; break;
             case TokenType.Ident:
-                let ident = snip(tokens[i].span);
-                let args: AstTy[] | null;
-                if (tokens[i + 1].ty === TokenType.Colon && tokens[i + 2].ty === TokenType.Colon) {
-                    i += 3;
-                    eatToken(TokenType.Lt, true);
-                    args = [];
-                    while (!eatToken(TokenType.Gt, false)) {
-                        if (args.length > 0) eatToken(TokenType.Comma, true);
-                        args.push(parseTy());
+                // foo
+                // foo::<bar>
+                // foo::<>::bar
+                // foo::<>::bar::<baz>
+                const segments: PathSegment<AstTy>[] = [
+                    { ident: snip(tokens[i].span), args: [] }
+                ];
+                i++;
+
+                let lastWasGenericArgs = false;
+                while (tokens[i].ty === TokenType.Colon && tokens[i + 1].ty === TokenType.Colon) {
+                    i += 2;
+                    if (eatToken(TokenType.Lt, false)) {
+                        if (lastWasGenericArgs) {
+                            throw new Error('cannot specify generic arguments on path twice');
+                        }
+                        lastWasGenericArgs = true;
+                        const args: GenericArg<AstTy>[] = [];
+                        while (!eatToken(TokenType.Gt, false)) {
+                            if (args.length > 0) {
+                                eatToken(TokenType.Comma);
+                            }
+                            args.push({ ty: parseTy(), type: 'Type' });
+                        }
+                        segments[segments.length - 1].args = args;
+                    } else {
+                        lastWasGenericArgs = false;
+
+                        const ident = expectIdent();
+                        segments.push({ ident, args: [] });
                     }
-                    i--;
-                } else {
-                    args = null;
                 }
-                expr = { type: 'Literal', span: tokens[i].span, ident, args }; break;
+                i--;
+                // TODO: this span is just wrong
+                expr = { type: 'Path', span: tokens[i].span, path: { segments } };
+                break;
             case TokenType.True: expr = { type: 'Bool', span: tokens[i].span, value: true }; break;
             case TokenType.False: expr = { type: 'Bool', span: tokens[i].span, value: false }; break;
             case TokenType.Dot: {

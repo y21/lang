@@ -1,4 +1,4 @@
-import { AstFnSignature, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Program, Stmt, TyAliasDecl } from "./parse";
+import { AstFnSignature, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -70,8 +70,9 @@ const INTRINSICS: Intrinsic[] = [
 ];
 export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
 export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy);
+export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
 export type TypeResolutions = Map<AstTy, TypeResolution>;
-export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter });
+export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution;
 export type ValueResolutions = Map<Expr, ValueResolution>;
 export type Resolutions = {
     tyResolutions: TypeResolutions,
@@ -108,7 +109,7 @@ export function computeResolutions(ast: Program): Resolutions {
     let entrypoint: FnDecl | null = null;
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
-    const identMap: Map<Expr, ValueResolution> = new Map();
+    const exprMap: Map<Expr, ValueResolution> = new Map();
     const breakableMap: Map<Expr, Breakable> = new Map();
 
     const withAllScopes = (f: () => void) => {
@@ -214,10 +215,28 @@ export function computeResolutions(ast: Program): Resolutions {
 
     function resolveExpr(expr: Expr) {
         switch (expr.type) {
-            case 'Literal':
-                registerRes(expr.ident, expr, valRes, identMap);
-                if (expr.args) {
-                    for (const arg of expr.args) resolveTy(arg);
+            case 'Path':
+                switch (expr.path.segments.length) {
+                    case 1: {
+                        const [segment] = expr.path.segments;
+                        registerRes(segment.ident, expr, valRes, exprMap);
+                        if (segment.args) {
+                            for (const arg of segment.args) resolveTy(arg.ty);
+                        }
+                        break;
+                    }
+                    case 2: {
+                        // Enum variants
+                        const [def, variant] = expr.path.segments;
+                        const defRes = tyRes.find(def.ident);
+                        if (!defRes || defRes.type !== 'Enum') {
+                            throw new Error(`first path segment must be an enum, got ${defRes?.type}`);
+                        }
+                        const variantIdx = defRes.variants.findIndex(v => v.name === variant.ident);
+                        exprMap.set(expr, { type: 'Variant', enum: defRes, variant: variantIdx });
+                        break;
+                    }
+                    default: throw new Error('only 1-2 path segments are currently supported');
                 }
                 break;
             case 'Block': for (const stmt of expr.stmts) resolveStmt(stmt); break;
@@ -337,5 +356,5 @@ export function computeResolutions(ast: Program): Resolutions {
         throw "'main' function not found";
     }
 
-    return { tyResolutions: tyMap, valueResolutions: identMap, breakableResolutions: breakableMap, entrypoint };
+    return { tyResolutions: tyMap, valueResolutions: exprMap, breakableResolutions: breakableMap, entrypoint };
 }

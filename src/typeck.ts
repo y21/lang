@@ -1,5 +1,5 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, genericsOfDecl, RecordFields, Stmt, Program, FnDecl } from "./parse";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment } from "./parse";
 import { Resolutions, PrimitiveTy } from "./resolve";
 import { Span } from "./span";
 import { TokenType } from "./token";
@@ -247,7 +247,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         function inner(expr: Expr): Ty {
             switch (expr.type) {
                 case 'Block': for (const stmt of expr.stmts) typeckStmt(stmt); return UNIT;
-                case 'Literal': {
+                case 'Path': {
                     const litres = res.valueResolutions.get(expr)!;
                     switch (litres.type) {
                         // TODO: is EMPTY_FLAGS correct here..?
@@ -255,6 +255,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'LetDecl': return infcx.localTy(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
+                        case 'Variant': return { type: 'Enum', decl: litres.enum, flags: EMPTY_FLAGS };
                         default: assertUnreachable(litres);
                     }
                 }
@@ -364,11 +365,19 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             args: []
                         };
 
-                        if (expr.callee.type === 'Literal' && expr.callee.args !== null) {
-                            sig.args = expr.callee.args.map(ty => {
-                                return ty.type === 'Infer'
+                        let segments: PathSegment<AstTy>[];
+                        let segment: PathSegment<AstTy>;
+
+                        if (
+                            expr.callee.type === 'Path'
+                            && (segments = expr.callee.path.segments)
+                            && (segment = segments[segments.length - 1])
+                            && segment.args.length > 0
+                        ) {
+                            sig.args = segment.args.map(ty => {
+                                return ty.ty.type === 'Infer'
                                     ? infcx.mkTyVar({ type: 'GenericArg', span: expr.span })
-                                    : lowerTy(ty)
+                                    : lowerTy(ty.ty)
                             });
                         } else {
                             for (let i = 0; i < callee.decl.sig.generics.length; i++) {
@@ -531,6 +540,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             // same type parameters
                             || (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id)
                             || (sub.type === 'str' && sup.type === 'str')
+                            || (sub.type === 'Enum' && sup.type === 'Enum' && sub.decl === sup.decl)
                         ) {
                             // OK
                         } else if (sub.type === 'Record' && sup.type === 'Record') {

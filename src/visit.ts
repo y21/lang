@@ -14,7 +14,7 @@ export function forEachExpr(expr: Expr, f: (e: Expr) => void) {
     f(expr);
 
     switch (expr.type) {
-        case 'Literal':
+        case 'Path':
         case 'Number':
         case 'Bool':
         case 'String': break;

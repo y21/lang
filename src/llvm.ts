@@ -12,7 +12,7 @@
 
 import { mangleInstFn } from "./mangle";
 import { MirBody, MirLocal, MirLocalId, MirPlace, MirValue, astToMir } from "./mir";
-import { FnDecl } from "./parse";
+import { AstEnum, FnDecl } from "./parse";
 import { Resolutions } from "./resolve";
 import { TokenType } from "./token";
 import { Ty, normalize, UNIT, isUnit } from "./ty";
@@ -33,6 +33,14 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
     let constSection = '';
     let constCount = 0;
     let nextConstId = () => `@ct.${constCount++}`;
+
+    function llEnum(def: AstEnum): string {
+        if (def.variants.length > 256) {
+            throw new Error(`enum ${def.name} has too many variants`);
+        } else {
+            return 'i8';
+        }
+    }
 
     function llTy(ty: Ty): string {
         switch (ty.type) {
@@ -58,11 +66,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'TyVid':
             case 'never':
                 throw new Error(`${ty.type} should not appear in llir lowering`);
-            case 'Enum': if (ty.decl.variants.length > 256) {
-                throw new Error(`enum ${ty.decl.name} has too many variants`);
-            } else {
-                return 'i8';
-            }
+            case 'Enum': return llEnum(ty.decl);
         }
     }
 
@@ -88,6 +92,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
             case 'Tuple': return '{' + val.value.map(v => llValTy(mir, v)).join(', ') + '}';
+            case 'Variant': return llEnum(val.enum);
         }
     }
 
@@ -121,6 +126,8 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                         constSection += `${ctId} = private constant ${ctTy} c"${val.value}"\n`;
                         return `{i8* bitcast(${ctTy}* ${ctId} to i8*), i64 ${val.value.length}}`;
                     case 'Unreachable': return 'poison';
+                    // At least for now, the variant index has 1:1 mapping to the in-memory representation
+                    case 'Variant': return val.variant.toString();
                     case 'FnDef':
                     case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
                     case 'Record':
