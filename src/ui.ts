@@ -10,7 +10,7 @@ let mode = process.argv.includes('--bless') ? 'bless' as const : 'check' as cons
 
 function normalize(out: string): string {
     return out
-        .replace(/^.+index\.js.+$/gm, '')
+        .replace(/^.+dist\/\w+\.js.+$/gm, '')
         .replace(/at .+/g, '')
         .replace(/^Node.js .+$/gm, '');
 }

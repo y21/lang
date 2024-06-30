@@ -48,12 +48,15 @@ export function tokenize(src: string): Token[] {
                 }
                 break;
             case '=':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.EqEq });
-                    i++;
-                } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Assign });
+                let ty: TokenType;
+                let hi: number;
+                switch (src[i + 1]) {
+                    case '=': ty = TokenType.EqEq; hi = 2; break;
+                    case '>': ty = TokenType.FatArrow; hi = 2; break;
+                    default: ty = TokenType.Assign; hi = 1; break;
                 }
+                tokens.push({ span: [start, i + hi], ty });
+                i += hi - 1;
                 break;
             case ';': tokens.push({ span: [start, i + 1], ty: TokenType.Semi }); break;
             case '.': tokens.push({ span: [start, i + 1], ty: TokenType.Dot }); break;
@@ -138,6 +141,7 @@ export function tokenize(src: string): Token[] {
                         case 'break': ty = TokenType.Break; break;
                         case 'enum': ty = TokenType.Enum; break;
                         case 'continue': ty = TokenType.Continue; break;
+                        case 'match': ty = TokenType.Match; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });

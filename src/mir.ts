@@ -1,5 +1,5 @@
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId } from "./parse";
-import { Resolutions } from "./resolve";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, AstPat } from "./parse";
+import { BindingPat, Resolutions } from "./resolve";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, ppTy } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
@@ -65,7 +65,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
     function lowerMir(): MirBody {
         if (decl.body.type !== 'Block') throw `${decl.sig.name} did not have a block as its body?`;
 
-        const astLocalToMirLocal = new Map<LetDecl | FnParameter, MirLocalId<false>>();
+        const astLocalToMirLocal = new Map<LetDecl | FnParameter | BindingPat, MirLocalId<false>>();
         const breakableInfo = new Map<{ type: 'While' } & Expr, BreakableInfo>();
         const locals: MirLocal[] = [];
         const addLocal = <temporary extends boolean = boolean>(ty: Ty, temporary: temporary): MirLocalId<temporary> => {
@@ -185,6 +185,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         }
                         case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
                         case 'Variant': return { type: 'Variant', enum: resolution.enum, variant: resolution.variant };
+                        case 'Binding': todo('binding');
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -448,6 +449,117 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     block = blocks[next];
                     return { type: 'Unreachable' };
                 }
+                case 'Match':
+                    // For now, simply compile the match to a series of if-else-if, with the binding pattern acting as 'else'
+                    //
+                    //     let v = Enum::Variant1;
+                    //     match v {
+                    //         Enum::Variant1 => {}
+                    //         Enum::Variant2 => {}
+                    //         other => {}
+                    //     }
+                    //
+                    // _scrutinee = Enum::Variant1
+                    // br arm1
+                    //
+                    // arm1.check:
+                    // _patternMatches = eq DiscriminantOf(_scrutinee), DiscriminantOf(Enum::Variant1)
+                    // br i1 arm1.body, arm2.check
+                    //
+                    // arm2.check:
+                    // _patternMatches = ...
+                    // br i1 arm2.body, else.body
+                    // 
+                    // arm1.body:
+                    // ...
+                    // br join
+                    //
+                    // else.body:
+                    // other = _scrutinee
+                    // ...
+                    // br join
+                    // join:
+                    // ; continue normal
+
+                    // In check branches, we only have the pattern matching code and a branch to either the n+1 check branch or the body of this arm.
+                    // Note that there will always be an n+1 branch that matches. A binding pattern as the last pattern will always match.
+                    const checkBranches = expr.arms.map(() => addBlock());
+                    assert(checkBranches.length > 0, 'match cannot have zero arms');
+                    // In body branches, we begin by extracting bindings out of patterns and then execute normal code. At the end, we always jump to a joined block.
+                    const bodyBranches = expr.arms.map(() => addBlock());
+                    const joinBlock = addBlock();
+
+                    const scrutinee = lowerExpr(expr.scrutinee);
+                    const scrutineeTy = typeck.exprTys.get(expr.scrutinee)!;
+                    block.terminator = {
+                        type: 'Jump',
+                        target: checkBranches[0]
+                    };
+
+                    for (let i = 0; i < checkBranches.length; i++) {
+                        const checkBranch = checkBranches[i];
+                        const bodyBranch = bodyBranches[i];
+                        const arm = expr.arms[i];
+
+                        // Compile the check branch
+                        block = blocks[checkBranch];
+
+                        switch (arm.pat.type) {
+                            case 'Number': todo('lower number pattern');
+                            case 'Path': {
+                                const res = resolutions.patResolutions.get(arm.pat)!;
+                                switch (res.type) {
+                                    case 'Binding':
+                                        // Nothing to check
+                                        block.terminator = { type: 'Jump', target: bodyBranch };
+                                        break;
+                                    case 'Variant': {
+                                        if (i === checkBranches.length - 1) {
+                                            // A variant pattern cannot be the last arm (currently; until we have exhaustive checking)
+                                            throw new Error(`no check block to jump to if arm ${i} fails`);
+                                        }
+                                        const binOpRes = addLocal(BOOL, true);
+                                        block.stmts.push({
+                                            type: 'BinOp',
+                                            assignee: binOpRes,
+                                            // Forcing a value is fine because it's just an int
+                                            lhs: asValue(scrutinee, scrutineeTy),
+                                            rhs: { type: 'Variant', enum: res.enum, variant: res.variant },
+                                            lhsTy: scrutineeTy,
+                                            op: TokenType.EqEq
+                                        });
+                                        block.terminator = { type: 'Conditional', condition: { type: 'Local', value: binOpRes }, then: bodyBranch, else: checkBranches[i + 1] };
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                            default: assertUnreachable(arm.pat)
+                        }
+
+                        // Compile the body branch
+                        block = blocks[bodyBranch];
+                        switch (arm.pat.type) {
+                            case 'Path': {
+                                const pathres = resolutions.patResolutions.get(arm.pat)!;
+                                if (pathres.type === 'Binding') {
+                                    const local = addLocal(scrutineeTy, false);
+                                    astLocalToMirLocal.set(pathres, local);
+                                    block.stmts.push({
+                                        type: 'Assignment',
+                                        assignee: { base: local, projections: [] },
+                                        value: asValue(scrutinee, scrutineeTy),
+                                    });
+                                }
+                                break;
+                            }
+                        }
+                        lowerExpr(arm.body);
+                        block.terminator = { type: 'Jump', target: joinBlock };
+                    }
+
+                    block = blocks[joinBlock];
+                    return UNIT_MIR;
                 default: assertUnreachable(expr);
             }
         }

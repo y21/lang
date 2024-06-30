@@ -70,6 +70,13 @@ export function forEachExpr(expr: Expr, f: (e: Expr) => void) {
         case 'Break':
         case 'Continue':
             break;
+        case 'Match': {
+            forEachExpr(expr.scrutinee, f);
+            for (const arm of expr.arms) {
+                forEachExpr(arm.body, f);
+            }
+            break;
+        }
         default: assertUnreachable(expr);
     }
 }

@@ -1,4 +1,4 @@
-import { AstFnSignature, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
+import { AstFnSignature, AstPat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, PathSegment, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -70,13 +70,17 @@ const INTRINSICS: Intrinsic[] = [
 ];
 export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
 export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy);
+export type BindingPat = { type: 'Binding', ident: string };
+export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
 export type TypeResolutions = Map<AstTy, TypeResolution>;
-export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution;
+export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution | BindingPat;
 export type ValueResolutions = Map<Expr, ValueResolution>;
+export type PatResolutions = Map<AstPat, PatResolution>;
 export type Resolutions = {
     tyResolutions: TypeResolutions,
     valueResolutions: ValueResolutions,
+    patResolutions: PatResolutions,
     breakableResolutions: Map<Expr, Breakable>,
     entrypoint: FnDecl
 };
@@ -110,6 +114,7 @@ export function computeResolutions(ast: Program): Resolutions {
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
     const exprMap: Map<Expr, ValueResolution> = new Map();
+    const patMap: Map<AstPat, PatResolution> = new Map();
     const breakableMap: Map<Expr, Breakable> = new Map();
 
     const withAllScopes = (f: () => void) => {
@@ -213,6 +218,37 @@ export function computeResolutions(ast: Program): Resolutions {
         }
     }
 
+    function resolveEnumPath(path: Path<AstTy>): VariantResolution {
+        const [def, variant] = path.segments;
+        const defRes = tyRes.find(def.ident);
+        if (!defRes || defRes.type !== 'Enum') {
+            throw new Error(`first path segment must be an enum, got ${defRes?.type}`);
+        }
+        const variantIdx = defRes.variants.findIndex(v => v.name === variant.ident);
+        return { type: 'Variant', enum: defRes, variant: variantIdx };
+    }
+
+    function resolvePat(pat: AstPat) {
+        switch (pat.type) {
+            case 'Number': break;
+            case 'Path':
+                switch (pat.path.segments.length) {
+                    case 1:
+                        // new binding
+                        const ident = pat.path.segments[0].ident;
+                        const binding: BindingPat = { type: 'Binding', ident };
+                        patMap.set(pat, binding);
+                        valRes.add(ident, binding);
+                        break;
+                    case 2:
+                        patMap.set(pat, resolveEnumPath(pat.path));
+                        break;
+                    default: throw new Error('only 1-2 path segments are currently supported');
+                }
+                break;
+        }
+    }
+
     function resolveExpr(expr: Expr) {
         switch (expr.type) {
             case 'Path':
@@ -227,13 +263,7 @@ export function computeResolutions(ast: Program): Resolutions {
                     }
                     case 2: {
                         // Enum variants
-                        const [def, variant] = expr.path.segments;
-                        const defRes = tyRes.find(def.ident);
-                        if (!defRes || defRes.type !== 'Enum') {
-                            throw new Error(`first path segment must be an enum, got ${defRes?.type}`);
-                        }
-                        const variantIdx = defRes.variants.findIndex(v => v.name === variant.ident);
-                        exprMap.set(expr, { type: 'Variant', enum: defRes, variant: variantIdx });
+                        exprMap.set(expr, resolveEnumPath(expr.path));
                         break;
                     }
                     default: throw new Error('only 1-2 path segments are currently supported');
@@ -307,6 +337,16 @@ export function computeResolutions(ast: Program): Resolutions {
                 breakableMap.set(expr, target);
                 break;
             }
+            case 'Match': {
+                resolveExpr(expr.scrutinee);
+                for (const arm of expr.arms) {
+                    valRes.withScope(() => {
+                        resolvePat(arm.pat);
+                        resolveExpr(arm.body);
+                    });
+                }
+                break;
+            }
             default: assertUnreachable(expr);
         }
     }
@@ -356,5 +396,5 @@ export function computeResolutions(ast: Program): Resolutions {
         throw "'main' function not found";
     }
 
-    return { tyResolutions: tyMap, valueResolutions: exprMap, breakableResolutions: breakableMap, entrypoint };
+    return { tyResolutions: tyMap, valueResolutions: exprMap, breakableResolutions: breakableMap, patResolutions: patMap, entrypoint };
 }

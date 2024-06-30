@@ -1,11 +1,5 @@
 # lang
 
-This is my personal language (name TBD).
-
-This mostly only exists so I can play around with my ideas around langdev.
-At this point, there's no reason for anyone to use this.
-Most of the ideas are taken from Rust (and TypeScript to some extent).
-
 ### Usage
 At this point the compiler is written in TypeScript (eventually it will be rewritten in this language and self-hosted).
 So you'll need node.js installed (and clang).

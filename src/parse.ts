@@ -40,6 +40,7 @@ export type Expr = { span: Span } & (
     | { type: "Return"; value: Expr }
     | { type: 'Break' }
     | { type: 'Continue' }
+    | { type: 'Match', scrutinee: Expr, arms: AstArm[] }
     | { type: "Unary"; op: UnaryOp; rhs: Expr }
     | {
         type: "Binary";
@@ -97,6 +98,11 @@ export type Program = { stmts: Stmt[] };
 export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
 export type Associativity = LeftToRight | RightToLeft;
+
+export type AstPat = { span: Span } & ({ type: 'Number', value: number }
+    | { type: 'Path', path: Path<AstTy> });
+
+export type AstArm = { pat: AstPat, body: Expr };
 
 export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl): Generics {
     if (decl.type === 'TyAlias') return decl.generics;
@@ -185,6 +191,19 @@ export function parse(src: string): Program {
             throw new Error(`Expected ${TokenType[ty]}, got ${TokenType[tok.ty]}`);
         } else {
             return false;
+        }
+    }
+
+    function parsePat(): AstPat {
+        return parseBottomPat();
+    }
+
+    function parseBottomPat(): AstPat {
+        const expr = parseRootExpr();
+        switch (expr.type) {
+            case 'Number': return { type: 'Number', value: expr.value, span: expr.span };
+            case 'Path': return { type: 'Path', path: expr.path, span: expr.span };
+            default: throw new Error(`${expr.type} cannot be used in pattern position`);
         }
     }
 
@@ -396,6 +415,23 @@ export function parse(src: string): Program {
             }
             case TokenType.Break: return { type: 'Break', span: tokens[i++].span };
             case TokenType.Continue: return { type: 'Continue', span: tokens[i++].span };
+            case TokenType.Match: {
+                const startSpan = tokens[i].span;
+                i++;
+                const scrutinee = parseRootExpr();
+                eatToken(TokenType.LBrace);
+
+                // parse arms
+                const arms: AstArm[] = [];
+                while (!eatToken(TokenType.RBrace, false)) {
+                    const pat = parsePat();
+                    eatToken(TokenType.FatArrow);
+                    const body = parseRootExpr();
+                    arms.push({ pat, body });
+                }
+
+                return { type: 'Match', span: joinSpan(startSpan, tokens[i - 1].span), scrutinee, arms };
+            }
             default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
         }
         i++;

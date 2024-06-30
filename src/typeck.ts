@@ -1,21 +1,23 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment } from "./parse";
-import { Resolutions, PrimitiveTy } from "./resolve";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, AstPat } from "./parse";
+import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, hasTyParam, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize } from "./ty";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32 } from "./ty";
 import { assert, assertUnreachable } from "./util";
 import { forEachExprInStmt } from "./visit";
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary';
+type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern';
 type Constraint = { cause: ConstraintCause, at: Span, depth: number } & ConstraintType;
 const MAX_CONSTRAINT_DEPTH = 200;
 
 type FnLocalState = {
     expectedReturnTy: Ty;
     returnFound: boolean;
+    // TODO: move away from localTypes and to patTypes, once LetDecl is implemented in terms of patterns
     localTypes: Map<LetDecl | FnParameter, Ty>;
+    patTypes: Map<BindingPat, Ty>;
 };
 
 export type TypeckResults = {
@@ -36,11 +38,12 @@ type InfTyVar = {
     constrainedTy: Ty | null,
     origin: TyVarOrigin,
 };
-type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span });
+type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span }) | { type: 'BindingPat', span: Span };
 function tyVarOriginSpan(origin: TyVarOrigin): Span {
     switch (origin.type) {
         case 'Expr': return origin.expr.span;
         case 'GenericArg': return origin.span;
+        case 'BindingPat': return origin.span;
     }
 }
 export type LUBResult = { hadErrors: boolean };
@@ -71,8 +74,8 @@ class Infcx {
         return ty;
     }
 
-    withFn(expect: Ty | undefined, localTypes: Map<LetDecl | FnParameter, Ty>, f: () => void) {
-        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false, localTypes });
+    withFn(expect: Ty | undefined, f: () => void) {
+        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false, localTypes: new Map(), patTypes: new Map() });
         f();
         const { expectedReturnTy, returnFound } = this.fnStack.pop()!;
         if (!isUnit(expectedReturnTy) && !returnFound) {
@@ -84,8 +87,16 @@ class Infcx {
         this.fnStack[this.fnStack.length - 1].localTypes.set(decl, ty);
     }
 
+    registerPat(pat: BindingPat, ty: Ty) {
+        this.fnStack[this.fnStack.length - 1].patTypes.set(pat, ty);
+    }
+
     localTy(decl: LetDecl | FnParameter): Ty | undefined {
         return this.fnStack[this.fnStack.length - 1].localTypes.get(decl);
+    }
+
+    patTy(pat: BindingPat): Ty | undefined {
+        return this.fnStack[this.fnStack.length - 1].patTypes.get(pat);
     }
 
     registerReturn(at: Span, ty: Ty) {
@@ -210,8 +221,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
 
     function typeckFn(decl: FnDecl) {
         const ret = decl.sig.ret && lowerTy(decl.sig.ret);
-        const locals = new Map();
-        infcx.withFn(ret, locals, () => { typeckExpr(decl.body); });
+        infcx.withFn(ret, () => { typeckExpr(decl.body); });
     }
 
     function typeckStmt(stmt: Stmt) {
@@ -243,6 +253,26 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         }
     }
 
+    function typeckPat(pat: AstPat): Ty {
+        switch (pat.type) {
+            case 'Number': return I32;
+            case 'Path': {
+                const pathres = res.patResolutions.get(pat);
+                if (pathres) {
+                    switch (pathres.type) {
+                        case 'Binding': {
+                            const ty = infcx.mkTyVar({ type: 'BindingPat', span: pat.span });
+                            return ty;
+                        }
+                        case 'Variant': return { type: 'Enum', decl: pathres.enum, flags: EMPTY_FLAGS };
+                    }
+                } else {
+                    throw new Error('unknown res in pattern');
+                }
+            }
+        }
+    }
+
     function typeckExpr(expr: Expr): Ty {
         function inner(expr: Expr): Ty {
             switch (expr.type) {
@@ -256,6 +286,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         case 'LetDecl': return infcx.localTy(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
                         case 'Variant': return { type: 'Enum', decl: litres.enum, flags: EMPTY_FLAGS };
+                        case 'Binding': return infcx.patTy(litres)!;
                         default: assertUnreachable(litres);
                     }
                 }
@@ -466,6 +497,15 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 case 'Break':
                 case 'Continue':
                     return { type: 'never', flags: EMPTY_FLAGS };
+                case 'Match': {
+                    const scrutineeTy = typeckExpr(expr.scrutinee);
+                    for (const arm of expr.arms) {
+                        const patTy = typeckPat(arm.pat);
+                        typeckExpr(arm.body);
+                        infcx.sub('Pattern', expr.span, patTy, scrutineeTy);
+                    }
+                    return UNIT;
+                }
                 default: assertUnreachable(expr);
             }
         }
