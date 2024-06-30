@@ -87,7 +87,8 @@ export function ppTy(ty: Ty): string {
             return out + '}';
         }
         case 'Alias':
-            return `${ty.decl.name}<${ty.args.map(ty => ppTy(ty)).join(', ')}>`;
+            if (ty.args.length === 0) return ty.decl.name;
+            else return `${ty.decl.name}<${ty.args.map(ty => ppTy(ty)).join(', ')}>`;
         case 'Tuple': return `(${ty.elements.map(ppTy).join(', ')})`;
         case 'Enum': return ty.decl.name;
     }

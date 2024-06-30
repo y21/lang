@@ -579,6 +579,8 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         } else if (sub.type === 'Alias' && sup.type === 'Alias') {
                             // TODO: check constructibleIn for both aliases
                             infcx.nestedSub(constraint, normalize(sub), normalize(sup));
+                        } else if (sub.type === 'Alias') {
+                            infcx.nestedSub(constraint, normalize(sub), normalize(sup));
                         } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                             let tyvid: { type: 'TyVid' } & Ty;
                             let other: Ty;

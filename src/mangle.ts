@@ -31,7 +31,14 @@ export function mangleTy(ty: Ty): string {
             }
             return out;
         }
-        case 'Record': todo('mangle record ty');
+        case 'Record': {
+            let out = '$LB$';
+            for (const [k, v] of ty.fields) {
+                out += k + '$$' + mangleTy(v);
+            }
+            out += '$RB$';
+            return out;
+        };
         case 'Tuple': {
             let out = '$LP$';
             for (let i = 0; i < ty.elements.length; i++) {
