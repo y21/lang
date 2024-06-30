@@ -99,10 +99,10 @@ export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
 export type Associativity = LeftToRight | RightToLeft;
 
-export type AstPat = { span: Span } & ({ type: 'Number', value: number }
+export type Pat = { span: Span } & ({ type: 'Number', value: number }
     | { type: 'Path', path: Path<AstTy> });
 
-export type AstArm = { pat: AstPat, body: Expr };
+export type AstArm = { pat: Pat, body: Expr };
 
 export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl): Generics {
     if (decl.type === 'TyAlias') return decl.generics;
@@ -194,11 +194,11 @@ export function parse(src: string): Program {
         }
     }
 
-    function parsePat(): AstPat {
+    function parsePat(): Pat {
         return parseBottomPat();
     }
 
-    function parseBottomPat(): AstPat {
+    function parseBottomPat(): Pat {
         const expr = parseRootExpr();
         switch (expr.type) {
             case 'Number': return { type: 'Number', value: expr.value, span: expr.span };

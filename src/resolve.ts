@@ -1,4 +1,4 @@
-import { AstFnSignature, AstPat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, PathSegment, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -76,7 +76,7 @@ export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstT
 export type TypeResolutions = Map<AstTy, TypeResolution>;
 export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution | BindingPat;
 export type ValueResolutions = Map<Expr, ValueResolution>;
-export type PatResolutions = Map<AstPat, PatResolution>;
+export type PatResolutions = Map<Pat, PatResolution>;
 export type Resolutions = {
     tyResolutions: TypeResolutions,
     valueResolutions: ValueResolutions,
@@ -114,7 +114,7 @@ export function computeResolutions(ast: Program): Resolutions {
 
     const tyMap: Map<AstTy, TypeResolution> = new Map();
     const exprMap: Map<Expr, ValueResolution> = new Map();
-    const patMap: Map<AstPat, PatResolution> = new Map();
+    const patMap: Map<Pat, PatResolution> = new Map();
     const breakableMap: Map<Expr, Breakable> = new Map();
 
     const withAllScopes = (f: () => void) => {
@@ -228,7 +228,7 @@ export function computeResolutions(ast: Program): Resolutions {
         return { type: 'Variant', enum: defRes, variant: variantIdx };
     }
 
-    function resolvePat(pat: AstPat) {
+    function resolvePat(pat: Pat) {
         switch (pat.type) {
             case 'Number': break;
             case 'Path':

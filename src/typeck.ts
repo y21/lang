@@ -1,5 +1,5 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, AstPat } from "./parse";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span } from "./span";
 import { TokenType } from "./token";
@@ -253,7 +253,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         }
     }
 
-    function typeckPat(pat: AstPat): Ty {
+    function typeckPat(pat: Pat): Ty {
         switch (pat.type) {
             case 'Number': return I32;
             case 'Path': {
