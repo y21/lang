@@ -56,7 +56,7 @@ export type Expr = { span: Span } & (
     | { type: "Tuple", elements: Expr[] }
 );
 
-export type LetDecl = { type: 'LetDecl', name: string, ty: AstTy | null, init: Expr };
+export type LetDecl = { type: 'LetDecl', name: string, ty: AstTy | null, init: Expr | null };
 
 export type AstFnSignature = {
     name: string,
@@ -760,8 +760,10 @@ export function parse(src: string): Program {
                 if (eatToken(TokenType.Colon, false)) {
                     ty = parseTy();
                 }
-                eatToken(TokenType.Assign);
-                const init = parseRootExpr();
+                let init: Expr | null = null;
+                if (eatToken(TokenType.Assign, false)) {
+                    init = parseRootExpr();
+                }
                 eatToken(TokenType.Semi);
                 return { span: joinSpan(letSpan, tokens[i - 1].span), ty, type: 'LetDecl', name, init };
             }

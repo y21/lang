@@ -1,79 +1,86 @@
 import { Stmt, Expr } from "./parse";
 import { assertUnreachable } from "./util";
 
-export function forEachExprInStmt(stmt: Stmt, f: (e: Expr) => void) {
+export function visitInStmt(stmt: Stmt, forExpr: (e: Expr) => void, forStmt: (s: Stmt) => void) {
+    forStmt(stmt);
+
     switch (stmt.type) {
-        case 'Expr': forEachExpr(stmt.value, f); break;
-        case 'FnDecl': forEachExpr(stmt.body, f); break;
-        case 'LetDecl': forEachExpr(stmt.init, f); break;
+        case 'Expr': visitInExpr(stmt.value, forExpr, forStmt); break;
+        case 'FnDecl': visitInExpr(stmt.body, forExpr, forStmt); break;
+        case 'LetDecl': {
+            if (stmt.init) {
+                visitInExpr(stmt.init, forExpr, forStmt);
+            }
+            break;
+        }
         case 'TyAlias': break;
     }
 }
 
-export function forEachExpr(expr: Expr, f: (e: Expr) => void) {
-    f(expr);
+export function visitInExpr(expr: Expr, forExpr: (e: Expr) => void, forStmt: (s: Stmt) => void) {
+    forExpr(expr);
 
     switch (expr.type) {
         case 'Path':
         case 'Number':
         case 'Bool':
         case 'String': break;
-        case 'Block': for (const stmt of expr.stmts) forEachExprInStmt(stmt, f); break;
-        case 'Return': forEachExpr(expr.value, f); break;
-        case 'ArrayLiteral': for (const elem of expr.elements) forEachExpr(elem, f); break;
-        case 'ArrayRepeat': forEachExpr(expr.element, f); break;
+        case 'Block': for (const stmt of expr.stmts) visitInStmt(stmt, forExpr, forStmt); break;
+        case 'Return': visitInExpr(expr.value, forExpr, forStmt); break;
+        case 'ArrayLiteral': for (const elem of expr.elements) visitInExpr(elem, forExpr, forStmt); break;
+        case 'ArrayRepeat': visitInExpr(expr.element, forExpr, forStmt); break;
         case 'Assignment':
-            forEachExpr(expr.target, f);
-            forEachExpr(expr.value, f);
+            visitInExpr(expr.target, forExpr, forStmt);
+            visitInExpr(expr.value, forExpr, forStmt);
             break;
         case 'Index':
-            forEachExpr(expr.target, f);
-            forEachExpr(expr.index, f);
+            visitInExpr(expr.target, forExpr, forStmt);
+            visitInExpr(expr.index, forExpr, forStmt);
             break;
         case 'Binary':
-            forEachExpr(expr.lhs, f);
-            forEachExpr(expr.rhs, f);
+            visitInExpr(expr.lhs, forExpr, forStmt);
+            visitInExpr(expr.rhs, forExpr, forStmt);
             break;
-        case 'AddrOf': forEachExpr(expr.pointee, f); break;
-        case 'Deref': forEachExpr(expr.pointee, f); break;
+        case 'AddrOf': visitInExpr(expr.pointee, forExpr, forStmt); break;
+        case 'Deref': visitInExpr(expr.pointee, forExpr, forStmt); break;
         case 'Record':
             for (const [, field] of expr.fields) {
-                forEachExpr(field, f)
+                visitInExpr(field, forExpr, forStmt);
             }
             break;
         case 'FnCall':
-            forEachExpr(expr.callee, f);
-            for (const arg of expr.args) forEachExpr(arg, f);
+            visitInExpr(expr.callee, forExpr, forStmt);
+            for (const arg of expr.args) visitInExpr(arg, forExpr, forStmt);
             break;
         case 'Property':
-            forEachExpr(expr.target, f);
+            visitInExpr(expr.target, forExpr, forStmt);
             break;
         case 'If':
-            forEachExpr(expr.condition, f);
-            forEachExpr(expr.then, f);
+            visitInExpr(expr.condition, forExpr, forStmt);
+            visitInExpr(expr.then, forExpr, forStmt);
             if (expr.else) {
-                forEachExpr(expr.else, f);
+                visitInExpr(expr.else, forExpr, forStmt);
             }
             break;
         case 'While':
-            forEachExpr(expr.condition, f);
-            forEachExpr(expr.body, f);
+            visitInExpr(expr.condition, forExpr, forStmt);
+            visitInExpr(expr.body, forExpr, forStmt);
             break;
         case 'Unary':
-            forEachExpr(expr.rhs, f);
+            visitInExpr(expr.rhs, forExpr, forStmt);
             break;
         case 'Tuple':
             for (const element of expr.elements) {
-                forEachExpr(element, f);
+                visitInExpr(element, forExpr, forStmt);
             }
             break;
         case 'Break':
         case 'Continue':
             break;
         case 'Match': {
-            forEachExpr(expr.scrutinee, f);
+            visitInExpr(expr.scrutinee, forExpr, forStmt);
             for (const arm of expr.arms) {
-                forEachExpr(arm.body, f);
+                visitInExpr(arm.body, forExpr, forStmt);
             }
             break;
         }

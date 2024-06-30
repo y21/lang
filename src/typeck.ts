@@ -5,7 +5,7 @@ import { Span } from "./span";
 import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE } from "./ty";
 import { assert, assertUnreachable, todo } from "./util";
-import { forEachExprInStmt } from "./visit";
+import { visitInStmt } from "./visit";
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern';
@@ -15,9 +15,6 @@ const MAX_CONSTRAINT_DEPTH = 200;
 type FnLocalState = {
     expectedReturnTy: Ty;
     returnFound: boolean;
-    // TODO: move away from localTypes and to patTypes, once LetDecl is implemented in terms of patterns
-    localTypes: Map<LetDecl | FnParameter, Ty>;
-    patTypes: Map<BindingPat, Ty>;
 };
 
 export type TypeckResults = {
@@ -25,6 +22,7 @@ export type TypeckResults = {
     loweredTys: Map<AstTy, Ty>,
     instantiatedFnSigs: Map<Expr, InstantiatedFnSig>,
     exprTys: Map<Expr, Ty>,
+    patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
     hadErrors: boolean
 };
 
@@ -38,12 +36,13 @@ type InfTyVar = {
     constrainedTy: Ty | null,
     origin: TyVarOrigin,
 };
-type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span }) | { type: 'BindingPat', span: Span };
+type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span }) | { type: 'BindingPat', span: Span } | { type: 'Let', span: Span };
 function tyVarOriginSpan(origin: TyVarOrigin): Span {
     switch (origin.type) {
         case 'Expr': return origin.expr.span;
         case 'GenericArg': return origin.span;
         case 'BindingPat': return origin.span;
+        case 'Let': return origin.span;
     }
 }
 export type LUBResult = { hadErrors: boolean };
@@ -75,28 +74,12 @@ class Infcx {
     }
 
     withFn(expect: Ty | undefined, f: () => void) {
-        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false, localTypes: new Map(), patTypes: new Map() });
+        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false });
         f();
         const { expectedReturnTy, returnFound } = this.fnStack.pop()!;
         if (!isUnit(expectedReturnTy) && !returnFound) {
             throw `Expected ${expectedReturnTy.type}, got ()`;
         }
-    }
-
-    registerLocal(decl: LetDecl, ty: Ty) {
-        this.fnStack[this.fnStack.length - 1].localTypes.set(decl, ty);
-    }
-
-    registerPat(pat: BindingPat, ty: Ty) {
-        this.fnStack[this.fnStack.length - 1].patTypes.set(pat, ty);
-    }
-
-    localTy(decl: LetDecl | FnParameter): Ty | undefined {
-        return this.fnStack[this.fnStack.length - 1].localTypes.get(decl);
-    }
-
-    patTy(pat: BindingPat): Ty | undefined {
-        return this.fnStack[this.fnStack.length - 1].patTypes.get(pat);
     }
 
     registerReturn(at: Span, ty: Ty) {
@@ -142,6 +125,8 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
     const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
+    // TODO: move away from LetDecl | FnParam, once LetDecl | FnParam is implemented in terms of patterns
+    const patTys: Map<LetDecl | FnParameter | BindingPat, Ty> = new Map();
 
     function lowerTy(ty: AstTy): Ty {
         let lowered = loweredTys.get(ty);
@@ -229,7 +214,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             case 'FnDecl': typeckFn(stmt); break;
             case 'Expr': typeckExpr(stmt.value); break;
             case 'LetDecl': {
-                const rety = typeckExpr(stmt.init);
+                const rety = stmt.init === null ? infcx.mkTyVar({ type: 'Let', span: stmt.span }) : typeckExpr(stmt.init);
                 if (stmt.ty) {
                     const annotatedTy = lowerTy(stmt.ty);
                     infcx.sub('Assignment', stmt.span, rety, annotatedTy);
@@ -241,9 +226,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     // which some expressions aren't ready to deal with (eg property access)
                     // using the annotated type allows that to compile because it won't be a type variable, but a proper record type.
                     // we still require proving annotatedTy == initTy at the end of typeck, though, above
-                    infcx.registerLocal(stmt, annotatedTy);
+                    patTys.set(stmt, annotatedTy);
                 } else {
-                    infcx.registerLocal(stmt, rety);
+                    patTys.set(stmt, rety);
                 }
                 break;
             }
@@ -293,10 +278,10 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         // TODO: is EMPTY_FLAGS correct here..?
                         case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
-                        case 'LetDecl': return infcx.localTy(litres)!;
+                        case 'LetDecl': return patTys.get(litres)!;
+                        case 'Binding': return patTys.get(litres)!;
                         case 'FnParam': return lowerTy(litres.param.ty);
                         case 'Variant': return { type: 'Enum', decl: litres.enum, flags: EMPTY_FLAGS };
-                        case 'Binding': return infcx.patTy(litres)!;
                         default: assertUnreachable(litres);
                     }
                 }
@@ -751,7 +736,6 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         }
     }
 
-    // Now that all type variables have been constrained, populate the various maps.
     function writebackExpr(expr: Expr) {
         let ty = infcx.exprTys.get(expr)!;
         switch (expr.type) {
@@ -770,10 +754,22 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             infcx.exprTys.set(expr, instantiated);
         }
     }
-    if (!lub.hadErrors) {
-        // Writeback assumes there were no errors and all ty vars were fully constrained, which may not be the case with errors
-        for (const stmt of ast.stmts) forEachExprInStmt(stmt, writebackExpr);
+
+    function writebackStmt(stmt: Stmt) {
+        if (stmt.type === 'LetDecl') {
+            const ty = patTys.get(stmt)!;
+            if (hasTyVid(ty)) {
+                const instantiated = instantiateTyVars(ty);
+                patTys.set(stmt, instantiated);
+            }
+        }
     }
 
-    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, hadErrors: lub.hadErrors };
+    // Now that all type variables have been constrained, populate the various maps.
+    // Writeback assumes there were no errors and all ty vars were fully constrained, which may not be the case with errors
+    if (!lub.hadErrors) {
+        for (const stmt of ast.stmts) visitInStmt(stmt, writebackExpr, writebackStmt);
+    }
+
+    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, hadErrors: lub.hadErrors };
 }

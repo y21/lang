@@ -138,11 +138,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     // TODO: we might want to at the very least validate intrinsic signatures
                     break;
                 case 'LetDecl': {
-                    const ty = typeck.exprTys.get(stmt.init)!;
+                    const ty = typeck.patTys.get(stmt)!;
                     const local = addLocal(ty, false);
                     astLocalToMirLocal.set(stmt, local);
-                    const value = asValue(lowerExpr(stmt.init), ty);
-                    block.stmts.push({ type: 'Assignment', assignee: { base: local, projections: [] }, value });
+                    if (stmt.init) {
+                        const value = asValue(lowerExpr(stmt.init), ty);
+                        block.stmts.push({ type: 'Assignment', assignee: { base: local, projections: [] }, value });
+                    }
                     break;
                 }
                 case 'Expr': lowerExpr(stmt.value); break;

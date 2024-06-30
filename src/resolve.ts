@@ -189,7 +189,9 @@ export function computeResolutions(ast: Program): Resolutions {
             case 'Expr': resolveExpr(stmt.value); break;
             case 'LetDecl': {
                 valRes.add(stmt.name, stmt);
-                resolveExpr(stmt.init);
+                if (stmt.init) {
+                    resolveExpr(stmt.init);
+                }
                 if (stmt.ty) {
                     resolveTy(stmt.ty);
                 }
