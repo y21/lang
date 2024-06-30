@@ -3,7 +3,7 @@ type Unnested = enum { A, B, C };
 fn main(): i32 {
     let x = Unnested::A;
     match x {
-        Unnested::A => { return 1; }
-        Unnested::B => { return 2; }
+        Unnested::A => return 1,
+        Unnested::B => return 2
     };
 }

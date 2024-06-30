@@ -424,6 +424,18 @@ export function parse(src: string): Program {
                 // parse arms
                 const arms: AstArm[] = [];
                 while (!eatToken(TokenType.RBrace, false)) {
+                    if (arms.length > 0) {
+                        const lastArm = arms[arms.length - 1];
+                        if (lastArm.body.type !== 'Block') {
+                            // Allow e.g.
+                            //   pat => {}
+                            //   pat => {}
+                            // but do require commas for:
+                            //   pat => return,
+                            //   pat => return
+                            eatToken(TokenType.Comma);
+                        }
+                    }
                     const pat = parsePat();
                     eatToken(TokenType.FatArrow);
                     const body = parseRootExpr();

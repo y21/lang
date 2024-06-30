@@ -1,11 +1,9 @@
 expr @ 4:23 4:24 => Unnested
 expr @ 5:11 5:12 => Unnested
-expr @ 6:33 6:34 => i32
-expr @ 6:26 6:34 => never
-expr @ 6:24 7:0 => ()
-expr @ 7:33 7:34 => i32
-expr @ 7:26 7:34 => never
-expr @ 7:24 8:0 => ()
+expr @ 6:31 6:32 => i32
+expr @ 6:24 6:32 => never
+expr @ 7:31 8:0 => i32
+expr @ 7:24 8:0 => never
 expr @ 5:5 8:6 => ()
 expr @ 3:16 10:1 => ()
 
