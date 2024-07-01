@@ -4,4 +4,10 @@ fn f<T>(x: T, y: T*) {}
 fn main() {
   let z = bitcast(0u64);
   f(1, z);
+
+  match bitcast(0) {
+    other => {
+      let x: u32 = other;
+    }
+  };
 }

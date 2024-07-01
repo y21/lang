@@ -1,10 +1,10 @@
 import { options } from "./cli";
 import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
-import { Span } from "./span";
+import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8 } from "./ty";
-import { assert, assertUnreachable, todo } from "./util";
+import { assert, assertUnreachable, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
@@ -257,6 +257,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     switch (pathres.type) {
                         case 'Binding': {
                             const ty = infcx.mkTyVar({ type: 'BindingPat', span: pat.span });
+                            patTys.set(pathres, ty);
                             return ty;
                         }
                         case 'Variant': return { type: 'Enum', decl: pathres.enum, flags: EMPTY_FLAGS };
@@ -512,6 +513,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             }
         }
         const t = inner(expr);
+        if (t === undefined) {
+            assert(false, `type-checking ${ppSpan(src, expr.span)} returned invalid type`);
+        }
         infcx.exprTys.set(expr, t);
         return t;
     }
@@ -533,7 +537,11 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
 
         while (madeProgress && infcx.constraints.length > 0) {
             for (let i = infcx.constraints.length - 1; i >= 0; i--) {
-                const constraint = infcx.constraints.pop()!;
+                // We iterate the constraints backwards because we sometimes add the same constraint back unchanged
+                // if we don't have enough information yet (e.g. TyVid <: TyVid).
+                // To avoid getting stuck in an infinite loop of processing the same thing that's constantly being re-added,
+                // don't use `pop()` but rather swap `i` with the last element.
+                let constraint = swapRemove(infcx.constraints, i);
                 const sub = infcx.tryResolve(constraint.sub);
                 const sup = infcx.tryResolve(constraint.sup);
                 if (constraint.depth >= MAX_CONSTRAINT_DEPTH) {

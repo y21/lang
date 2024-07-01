@@ -197,13 +197,18 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             };
                         };
                         case 'FnParam':
-                        case 'LetDecl': {
-                            const id = astLocalToMirLocal.get(resolution.type === 'LetDecl' ? resolution : resolution.param)!;
+                        case 'LetDecl':
+                        case 'Binding': {
+                            let id: MirLocalId;
+                            switch (resolution.type) {
+                                case 'FnParam': id = astLocalToMirLocal.get(resolution.param)!; break;
+                                case 'LetDecl':
+                                case "Binding": id = astLocalToMirLocal.get(resolution)!;
+                            }
                             return { type: 'Place', base: id, projections: [] };
                         }
                         case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
                         case 'Variant': return { type: 'Variant', enum: resolution.enum, variant: resolution.variant };
-                        case 'Binding': todo('binding');
                         default: assertUnreachable(resolution);
                     }
                 }
