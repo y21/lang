@@ -35,7 +35,7 @@ export type Expr = { span: Span } & (
     | { type: "Index"; target: Expr; index: Expr }
     | { type: "ArrayLiteral"; elements: Expr[] }
     | { type: "ArrayRepeat"; element: Expr; count: number }
-    | { type: "Number"; value: number; suffix: IntTy }
+    | { type: "Number"; value: number; suffix: IntTy | null }
     | { type: "Bool"; value: boolean }
     | { type: "String"; value: string }
     | { type: 'ByteCharacter', value: string }
@@ -407,7 +407,7 @@ export function parse(src: string): Program {
 
                     expr = { type: 'Number', span: unsuffixSpan, suffix: (foundSuffix[1] as { type: 'int', value: IntTy }).value, value: unsuffixSnip };
                 } else {
-                    expr = { type: 'Number', span: tokens[i].span, suffix: { signed: true, bits: 32, }, value: +snip(tokens[i].span) };
+                    expr = { type: 'Number', span: tokens[i].span, suffix: null, value: +snip(tokens[i].span) };
                 }
                 break;
             }

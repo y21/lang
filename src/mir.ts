@@ -184,7 +184,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
 
         function lowerExpr(expr: Expr): LowerExprResult {
             switch (expr.type) {
-                case 'Number': return { type: 'int', ity: expr.suffix, value: expr.value };
+                case 'Number': {
+                    const ity = typeck.exprTys.get(expr)!;
+                    if (ity.type !== 'int') {
+                        throw new Error('number expression was not an int type');
+                    }
+                    return { type: 'int', ity: ity.value, value: expr.value };
+                }
                 case 'ByteCharacter': return { type: 'int', ity: U8.value, value: expr.value.charCodeAt(0) };
                 case 'String': return { type: 'str', value: expr.value };
                 case 'Path': {

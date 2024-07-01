@@ -34,17 +34,46 @@ export type InstantiatedFnSig = {
 
 type InfTyVar = {
     constrainedTy: Ty | null,
+    // when we come across a constraint that we can't make any progress on (such as ?0t == ?1t), instead of adding it back to infcx.constraints,
+    // add the constraint to both sides' `delayedConstraints` and only push all of them at some later point to infcx.constraints
+    // when either one gets constrained
+    //
+    // this is done like this so as to prevent overflows for fallback: `1 + 1` requires `?1i == ?2i` with no way to immediately make progress,
+    // so store it as a delayed constraint in both ?1i and ?2i.
+    // now if we come across e.g. `?2i == i32` and `?2i` gets constrained, we can process the old `?1i == ?2i` constraint and finally make progress on that.
+    // OTOH, if it never gets constrained, at the end of LUB check, we can apply fallback by forcefully constraining all integer type vars to i32
+    // and re-add their constraints one last time so that we check `i32 == i32`, which succeeds
+    delayedConstraints: Constraint[],
     origin: TyVarOrigin,
 };
-type TyVarOrigin = ({ type: 'Expr', expr: Expr } | { type: 'GenericArg', span: Span }) | { type: 'BindingPat', span: Span } | { type: 'Let', span: Span };
+type TyVarOrigin = { type: 'Expr', expr: Expr }
+    | { type: 'GenericArg', span: Span }
+    | { type: 'BindingPat', span: Span }
+    | { type: 'Let', span: Span }
+    // special: falls back to `i32` and doesn't need to be constrained
+    | { type: 'IntegerLiteral', span: Span };
+
 function tyVarOriginSpan(origin: TyVarOrigin): Span {
     switch (origin.type) {
         case 'Expr': return origin.expr.span;
         case 'GenericArg': return origin.span;
         case 'BindingPat': return origin.span;
         case 'Let': return origin.span;
+        case 'IntegerLiteral': return origin.span;
     }
 }
+
+function originFallback(origin: TyVarOrigin): Ty | null {
+    switch (origin.type) {
+        case 'IntegerLiteral': return I32;
+        default: return null;
+    }
+}
+
+function tyVarHasFallback(tyvar: InfTyVar): boolean {
+    return originFallback(tyvar.origin) !== null;
+}
+
 export type LUBResult = { hadErrors: boolean };
 
 class Infcx {
@@ -65,7 +94,7 @@ class Infcx {
 
     mkTyVar(origin: TyVarOrigin): Ty {
         const id = this.tyVars.length;
-        this.tyVars.push({ constrainedTy: null, origin });
+        this.tyVars.push({ constrainedTy: null, origin, delayedConstraints: [] });
         const ty: Ty = { type: 'TyVid', flags: TYVID_MASK, id };
         if (origin.type === 'Expr') {
             this.exprTys.set(origin.expr, ty);
@@ -320,7 +349,12 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     }
                 }
                 // TODO: typescript's "as const" can create a literal type?
-                case 'Number': return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
+                case 'Number':
+                    if (expr.suffix) {
+                        return { type: 'int', flags: EMPTY_FLAGS, value: expr.suffix };
+                    } else {
+                        return infcx.mkTyVar({ span: expr.span, type: 'IntegerLiteral' });
+                    }
                 case 'ByteCharacter': return U8;
                 case 'Bool': return BOOL;
                 case 'String': return STR_SLICE;
@@ -522,165 +556,215 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
 
     function computeLUBTypes(): LUBResult {
         let errors = false;
-        let madeProgress = true;
+
         // we're using a simple number here that's decremented when constraining a new var
         // to save on another pass through the tyVars at the end in the happy case where everything was constrained
-        let remainingInferVars = infcx.tyVars.reduce((prev, curr) => prev + +(curr.constrainedTy === null), 0);
-        assert(remainingInferVars === infcx.tyVars.length, 'cannot call computeLUBTypes() with already constrained infer vars');
+        let remainingInferVars = infcx.tyVars
+            .reduce((prev, curr) => prev + +(curr.constrainedTy === null), 0);
 
         const constrainVid = (vid: number, ty: Ty) => {
-            assert(infcx.tyVars[vid].constrainedTy === null, 'tried to constrain the same TyVid twice');
+            const tyvar = infcx.tyVars[vid];
+            assert(tyvar.constrainedTy === null, 'tried to constrain the same TyVid twice');
             remainingInferVars--;
-            infcx.tyVars[vid].constrainedTy = ty;
-            madeProgress = true;
+            tyvar.constrainedTy = ty;
+            for (const constraint of tyvar.delayedConstraints) infcx.constraints.push(constraint);
         };
 
-        while (madeProgress && infcx.constraints.length > 0) {
-            for (let i = infcx.constraints.length - 1; i >= 0; i--) {
-                // We iterate the constraints backwards because we sometimes add the same constraint back unchanged
-                // if we don't have enough information yet (e.g. TyVid <: TyVid).
-                // To avoid getting stuck in an infinite loop of processing the same thing that's constantly being re-added,
-                // don't use `pop()` but rather swap `i` with the last element.
-                let constraint = swapRemove(infcx.constraints, i);
-                const sub = infcx.tryResolve(constraint.sub);
-                const sup = infcx.tryResolve(constraint.sup);
-                if (constraint.depth >= MAX_CONSTRAINT_DEPTH) {
-                    let pretty: string;
+        function lubStep() {
+            while (infcx.constraints.length > 0) {
+                for (let i = infcx.constraints.length - 1; i >= 0; i--) {
+                    // We iterate the constraints backwards because we sometimes add the same constraint back unchanged
+                    // if we don't have enough information yet (e.g. TyVid <: TyVid).
+                    // To avoid getting stuck in an infinite loop of processing the same thing that's constantly being re-added,
+                    // don't use `pop()` but rather swap `i` with the last element.
+                    let constraint = swapRemove(infcx.constraints, i);
+                    const sub = infcx.tryResolve(constraint.sub);
+                    const sup = infcx.tryResolve(constraint.sup);
+                    if (constraint.depth >= MAX_CONSTRAINT_DEPTH) {
+                        let pretty: string;
+                        switch (constraint.type) {
+                            case 'SubtypeOf':
+                                // <: would be more correct, but there is currently no difference, and this is easier to understand
+                                pretty = `${ppTy(sub)} == ${ppTy(sup)}`;
+                                break;
+                        }
+                        error(
+                            src, constraint.at,
+                            `type error: overflow evaluating whether \`${pretty}\` holds`,
+                            'consider adding type annotations to help inference'
+                        );
+                        errors = true;
+                        continue;
+                    }
+
+                    function subFields(parent: Constraint, sub: Ty & RecordType, sup: Ty & RecordType) {
+                        if (sub.fields.length !== sup.fields.length) {
+                            // Fast fail: no point in comparing fields when they lengths don't match.
+                            error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
+                        } else {
+                            for (let i = 0; i < sub.fields.length; i++) {
+                                const subf = sub.fields[i];
+                                const supf = sup.fields[i];
+                                if (subf[0] !== supf[0]) {
+                                    error(src, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
+                                } else {
+                                    infcx.nestedSub(parent, subf[1], supf[1]);
+                                }
+                            }
+                        }
+                    }
+
                     switch (constraint.type) {
                         case 'SubtypeOf':
-                            // <: would be more correct, but there is currently no difference, and this is easier to understand
-                            pretty = `${ppTy(sub)} == ${ppTy(sup)}`;
+                            // Trivial cases which are always true without requiring nested constraints:
+                            if (
+                                // int == int of same size & signedness
+                                (sub.type === 'int' && sup.type === 'int' && sub.value.bits === sup.value.bits && sub.value.signed === sup.value.signed)
+                                // bool == bool
+                                || (sub.type === 'bool' && sup.type === 'bool')
+                                // same type parameters
+                                || (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id)
+                                || (sub.type === 'str' && sup.type === 'str')
+                                || (sub.type === 'Enum' && sup.type === 'Enum' && sub.decl === sup.decl)
+                            ) {
+                                // OK
+                            } else if (sub.type === 'Record' && sup.type === 'Record') {
+                                subFields(constraint, sub, sup);
+                            } else if (sub.type === 'Tuple' && sup.type === 'Tuple') {
+                                if (sub.elements.length !== sup.elements.length) {
+                                    error(src, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
+                                } else {
+                                    for (let i = 0; i < sub.elements.length; i++) {
+                                        const subf = sub.elements[i];
+                                        const supf = sup.elements[i];
+                                        infcx.nestedSub(constraint, subf, supf);
+                                    }
+                                }
+                            } else if (sub.type === 'Array' && sup.type === 'Array') {
+                                if (sub.len !== sup.len) {
+                                    error(src, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
+                                }
+                                infcx.nestedSub(constraint, sub.elemTy, sup.elemTy);
+                            } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
+                                infcx.nestedSub(constraint, sub.pointee, sup.pointee);
+                            } else if (sub.type === 'Record' && sup.type === 'Alias') {
+                                // TODO: also check args
+                                const nsup = normalize(sup);
+                                if (nsup.type === 'Record') {
+                                    if (
+                                        sup.decl.constructibleIn.length > 0
+                                        // Can only unify if the constraint was added in any of the specified functions.
+                                        // TODO: actually check this. figure out how to get the parentFn here
+                                        && !sup.decl.constructibleIn.some((v) => true)
+                                    ) {
+                                        error(src, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
+                                    }
+                                    subFields(constraint, sub, nsup);
+                                }
+                            } else if (sub.type === 'Alias' && sup.type === 'Alias') {
+                                // TODO: check constructibleIn for both aliases
+                                infcx.nestedSub(constraint, normalize(sub), normalize(sup));
+                            } else if (sub.type === 'Alias') {
+                                infcx.nestedSub(constraint, normalize(sub), normalize(sup));
+                            } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
+                                let tyvid: { type: 'TyVid' } & Ty;
+                                let other: Ty;
+
+                                if (sub.type === 'TyVid') {
+                                    tyvid = sub;
+                                    other = sup;
+                                } else if (sup.type === 'TyVid') {
+                                    tyvid = sup;
+                                    other = sub;
+                                } else {
+                                    throw 'unreachable';
+                                }
+
+                                if (infcx.tyVars[tyvid.id].origin.type === 'IntegerLiteral' && other.type !== 'int') {
+                                    // attempting to constrain an integer variable to a non-int type
+                                    const msub = sub === tyvid ? '{{integer}}' : ppTy(sub);
+                                    const msup = sup === tyvid ? '{{integer}}' : ppTy(sup);
+                                    error(src, constraint.at, `type error: ${msub} is not assignable to ${msup}`);
+                                    errors = true;
+                                } else {
+                                    constrainVid(tyvid.id, other);
+                                }
+                            } else if (sub.type === 'TyVid' && sup.type === 'TyVid') {
+                                // Both related types are type variables, can't progress; delay them
+                                infcx.tyVars[sub.id].delayedConstraints.push(constraint);
+                                infcx.tyVars[sup.id].delayedConstraints.push(constraint);
+                            }
+                            else if (sub.type === 'never') {
+                                // OK. Never is a subtype of all types.
+                            } else {
+                                // Error case.
+
+                                let message: string;
+                                switch (constraint.cause) {
+                                    case 'Binary':
+                                        message = `left-hand side and right-hand side must be of the same type, got ${sub.type} and ${sup.type}`;
+                                        break;
+                                    default: message = `${ppTy(sub)} is not assignable to ${ppTy(sup)}`;
+                                }
+
+                                error(src, constraint.at, `type error: ${message}`);
+                                errors = true;
+                            }
                             break;
+                        default: assertUnreachable(constraint.type)
                     }
-                    error(
-                        src, constraint.at,
-                        `type error: overflow evaluating whether \`${pretty}\` holds`,
-                        'consider adding type annotations to help inference'
-                    );
-                    errors = true;
-                    continue;
-                }
-
-                function subFields(parent: Constraint, sub: Ty & RecordType, sup: Ty & RecordType) {
-                    if (sub.fields.length !== sup.fields.length) {
-                        // Fast fail: no point in comparing fields when they lengths don't match.
-                        error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
-                    } else {
-                        for (let i = 0; i < sub.fields.length; i++) {
-                            const subf = sub.fields[i];
-                            const supf = sup.fields[i];
-                            if (subf[0] !== supf[0]) {
-                                error(src, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
-                            } else {
-                                infcx.nestedSub(parent, subf[1], supf[1]);
-                            }
-                        }
-                        madeProgress = true;
-                    }
-                }
-
-                switch (constraint.type) {
-                    case 'SubtypeOf':
-                        // Trivial cases which are always true without requiring nested constraints:
-                        if (
-                            // int == int of same size & signedness
-                            (sub.type === 'int' && sup.type === 'int' && sub.value.bits === sup.value.bits && sub.value.signed === sup.value.signed)
-                            // bool == bool
-                            || (sub.type === 'bool' && sup.type === 'bool')
-                            // same type parameters
-                            || (sub.type === 'TyParam' && sup.type === 'TyParam' && sub.id === sup.id)
-                            || (sub.type === 'str' && sup.type === 'str')
-                            || (sub.type === 'Enum' && sup.type === 'Enum' && sub.decl === sup.decl)
-                        ) {
-                            // OK
-                        } else if (sub.type === 'Record' && sup.type === 'Record') {
-                            subFields(constraint, sub, sup);
-                        } else if (sub.type === 'Tuple' && sup.type === 'Tuple') {
-                            if (sub.elements.length !== sup.elements.length) {
-                                error(src, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
-                            } else {
-                                for (let i = 0; i < sub.elements.length; i++) {
-                                    const subf = sub.elements[i];
-                                    const supf = sup.elements[i];
-                                    infcx.nestedSub(constraint, subf, supf);
-                                }
-                            }
-                        } else if (sub.type === 'Array' && sup.type === 'Array') {
-                            if (sub.len !== sup.len) {
-                                error(src, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
-                            }
-                            infcx.nestedSub(constraint, sub.elemTy, sup.elemTy);
-                        } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
-                            infcx.nestedSub(constraint, sub.pointee, sup.pointee);
-                        } else if (sub.type === 'Record' && sup.type === 'Alias') {
-                            // TODO: also check args
-                            const nsup = normalize(sup);
-                            if (nsup.type === 'Record') {
-                                if (
-                                    sup.decl.constructibleIn.length > 0
-                                    // Can only unify if the constraint was added in any of the specified functions.
-                                    // TODO: actually check this. figure out how to get the parentFn here
-                                    && !sup.decl.constructibleIn.some((v) => true)
-                                ) {
-                                    error(src, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
-                                }
-                                subFields(constraint, sub, nsup);
-                            }
-                        } else if (sub.type === 'Alias' && sup.type === 'Alias') {
-                            // TODO: check constructibleIn for both aliases
-                            infcx.nestedSub(constraint, normalize(sub), normalize(sup));
-                        } else if (sub.type === 'Alias') {
-                            infcx.nestedSub(constraint, normalize(sub), normalize(sup));
-                        } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
-                            let tyvid: { type: 'TyVid' } & Ty;
-                            let other: Ty;
-
-                            if (sub.type === 'TyVid') {
-                                tyvid = sub;
-                                other = sup;
-                            } else if (sup.type === 'TyVid') {
-                                tyvid = sup;
-                                other = sub;
-                            } else {
-                                throw 'unreachable';
-                            }
-
-                            constrainVid(tyvid.id, other);
-                        } else if (sub.type === 'TyVid' && sup.type === 'TyVid') {
-                            // Both related types are type variables, can't progress
-                            infcx.nestedSub(constraint, sub, sup);
-                        }
-                        else if (sub.type === 'never') {
-                            // OK. Never is a subtype of all types.
-                        } else {
-                            // Error case.
-
-                            let message: string;
-                            switch (constraint.cause) {
-                                case 'Binary':
-                                    message = `left-hand side and right-hand side must be of the same type, got ${sub.type} and ${sup.type}`;
-                                    break;
-                                default: message = `${ppTy(sub)} is not assignable to ${ppTy(sup)}`;
-                            }
-
-                            error(src, constraint.at, `type error: ${message}`);
-                            errors = true;
-                        }
-                        break;
-                    default: assertUnreachable(constraint.type)
                 }
             }
         }
 
-        if (infcx.constraints.length > 0) {
-            throw new Error('LUB compute got stuck making no progress but there are still constraints!');
-        }
+        // Initial LUB check: pre-fallback.
+        // After this, any type variable with no fallback *should* have been constrained to a specific type.
+        lubStep();
 
         if (remainingInferVars > 0) {
-            for (const tyvar of infcx.tyVars) {
-                if (tyvar.constrainedTy === null) {
-                    error(src, tyVarOriginSpan(tyvar.origin), `type error: unconstrained type variable created here`)
-                    errors = true;
+            // We have remaining infer variables; this either means fallback needs to apply (for integer types specifically)
+            // or we tell the user that type annotations are needed if there is no fallback
+            // Note that if fallback did apply at least once, we do want to allow normal unconstrained type variables.
+            // This can happen when relating a type variable and an integer variable, which should work.
+
+            let fallbackApplied = false;
+            for (let i = 0; i < infcx.tyVars.length; i++) {
+                const tyvar = infcx.tyVars[i];
+                if (!tyvar.constrainedTy) {
+                    const fallback = originFallback(tyvar.origin);
+
+                    if (fallback) {
+                        if (options.verbose) {
+                            console.log(`fallback @ ${ppSpan(src, tyVarOriginSpan(tyvar.origin))}`);
+                        }
+                        constrainVid(i, fallback);
+                        fallbackApplied = true;
+                    }
+                }
+            }
+
+            function reportTypeAnnotationsNeeded() {
+                for (const tyvar of infcx.tyVars) {
+                    if (!tyvar.constrainedTy && !tyVarHasFallback(tyvar)) {
+                        error(src, tyVarOriginSpan(tyvar.origin), 'type annotations needed');
+                        errors = true;
+                    }
+                }
+            }
+
+            if (!fallbackApplied) {
+                // If fallback did not even apply once, we will not make any progress in any further lubStep call,
+                // so emit an error here.
+                reportTypeAnnotationsNeeded();
+            }
+
+            if (!errors) {
+                // If errors didn't occur (implying that fallback occurred), we can make more progress.
+                lubStep();
+
+                if (remainingInferVars > 0) {
+                    // If we *still* have remaining infer vars after applying fallback, give up. There's nothing else we can do.
+                    reportTypeAnnotationsNeeded();
                 }
             }
         }

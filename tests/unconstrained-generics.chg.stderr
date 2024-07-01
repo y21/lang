@@ -1,4 +1,4 @@
 
 
     return foo();
-           ^^^^^  type error: unconstrained type variable created here
+           ^^^^^  type annotations needed

@@ -1,3 +1,6 @@
+fallback @ 1:31 1:32
+fallback @ 2:37 2:38
+fallback @ 3:37 3:38
 expr @ 1:23 1:30 => extern "intrinsic" fn bitcast(...)
 expr @ 1:31 1:32 => i32
 expr @ 1:23 1:33 => i32
