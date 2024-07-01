@@ -9,6 +9,9 @@ fn t6(): i16 { return 32767i16; }
 fn t7(): i32 { return 2147483647i32; }
 fn t8(): i64 { return 9223372036854775807i64; }
 
+fn int_inference(): i64 { return 5; }
+fn int_inference(): i64 { return 5 * 5; }
+
 fn t9(): bool { return true; }
 fn t10(): bool { return false; }
 
