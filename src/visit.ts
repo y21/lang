@@ -88,6 +88,11 @@ export function visitInExpr(expr: Expr, forExpr: (e: Expr) => void, forStmt: (s:
             }
             break;
         }
+        case 'MethodCall': {
+            for (const arg of expr.args) visitInExpr(arg, forExpr, forStmt);
+            visitInExpr(expr.target, forExpr, forStmt);
+            break;
+        }
         default: assertUnreachable(expr);
     }
 }

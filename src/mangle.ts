@@ -55,7 +55,7 @@ export function mangleTy(ty: Ty): string {
 export function mangleInstFn(decl: FnDecl, args: Ty[]): string {
     let mangled = decl.sig.name;
 
-    assert(decl.sig.generics.length === args.length, `mismatched generic args when mangling ${decl.sig.name}`);
+    assert((decl.parent?.generics.length ?? 0) + decl.sig.generics.length === args.length, `mismatched generic args when mangling ${decl.sig.name}`);
     if (args.length > 0) {
         mangled += '$LT$';
 

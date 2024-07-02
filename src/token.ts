@@ -56,7 +56,9 @@ export enum TokenType {
     AndAnd,
     Or,
     OrOr,
-    ByteChar
+    ByteChar,
+    Impl,
+    SelfTy
 }
 
 export interface Token {

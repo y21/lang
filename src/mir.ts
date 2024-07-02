@@ -1,4 +1,4 @@
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Pat } from "./parse";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl } from "./parse";
 import { BindingPat, Resolutions } from "./resolve";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8 } from "./ty";
@@ -110,7 +110,16 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
 
         const parameters = [];
         for (const param of decl.sig.parameters) {
-            const local = addLocal(typeck.loweredTys.get(param.ty)!, false);
+            let ty: Ty;
+            if (param.type === 'Receiver') {
+                ty = typeck.loweredTys.get((decl.parent as Impl).selfTy)!;
+                if (param.ptr) {
+                    ty = { type: 'Pointer', flags: ty.flags, mtb: param.ptr, pointee: ty };
+                }
+            } else {
+                ty = typeck.loweredTys.get(param.ty)!;
+            }
+            const local = addLocal(ty, false);
             parameters.push(local);
             astLocalToMirLocal.set(param, local);
         }
@@ -146,6 +155,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
 
         function lowerStmt(stmt: Stmt) {
             switch (stmt.type) {
+                case 'Impl': break;
                 case 'FnDecl': break; // Nested bodies are only lowered when explicitly requested
                 case 'ExternFnDecl':
                     // Extern fns don't have a body, nothing needs to be lowered
@@ -178,6 +188,14 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
             blocks.push(newBlock);
             block = newBlock;
             return { type: 'Unreachable' };
+        }
+
+        function instantiateFnSig(sig: InstantiatedFnSig, args: Ty[]): InstantiatedFnSig {
+            return {
+                args: sig.args.map(ty => instantiateTy(ty, args)),
+                parameters: sig.parameters.map(ty => instantiateTy(ty, args)),
+                ret: instantiateTy(sig.ret, args)
+            }
         }
 
         type LowerExprResult = MirValue | ({ type: 'Place' } & MirPlace);
@@ -369,13 +387,6 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     return pointee;
                 }
                 case 'FnCall': {
-                    function instantiateFnSig(sig: InstantiatedFnSig, args: Ty[]): InstantiatedFnSig {
-                        return {
-                            args: sig.args.map(ty => instantiateTy(ty, args)),
-                            parameters: sig.parameters.map(ty => instantiateTy(ty, args)),
-                            ret: instantiateTy(sig.ret, args)
-                        }
-                    }
                     const sig = instantiateFnSig(typeck.instantiatedFnSigs.get(expr)!, args);
 
                     // calls to intrinsics are special cased
@@ -730,6 +741,23 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     } else {
                         return UNIT_MIR;
                     }
+                }
+                case 'MethodCall': {
+                    const sig = instantiateFnSig(typeck.instantiatedFnSigs.get(expr)!, args);
+                    const receiver = asValue(lowerExpr(expr.target), typeck.exprTys.get(expr.target)!);
+                    const method = typeck.selectedMethods.get(expr)!;
+
+                    const res = addLocal(sig.ret, true);
+
+                    const callArgs = [receiver, ...expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!))];
+
+                    const targetBlock = blocks.length;
+                    blocks.push({ stmts: [], terminator: null });
+
+                    block.terminator = { type: 'Call', args: callArgs, assignee: res, decl: method.decl, sig, target: targetBlock };
+                    block = blocks[targetBlock];
+
+                    return { type: 'Local', value: res };
                 }
                 default: assertUnreachable(expr);
             }

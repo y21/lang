@@ -1,5 +1,5 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat } from "./parse";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
@@ -23,6 +23,7 @@ export type TypeckResults = {
     instantiatedFnSigs: Map<Expr, InstantiatedFnSig>,
     exprTys: Map<Expr, Ty>,
     patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
+    selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem>,
     hadErrors: boolean
 };
 
@@ -156,6 +157,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
     const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
     // TODO: move away from LetDecl | FnParam, once LetDecl | FnParam is implemented in terms of patterns
     const patTys: Map<LetDecl | FnParameter | BindingPat, Ty> = new Map();
+    const selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem> = new Map();
 
     function lowerTy(ty: AstTy): Ty {
         let lowered = loweredTys.get(ty);
@@ -233,8 +235,19 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         return lowered;
     }
 
-    function typeckFn(decl: FnDecl) {
+    function typeckFn(decl: FnDecl, enclosingImpl?: Impl) {
         const ret = decl.sig.ret && lowerTy(decl.sig.ret);
+        for (const parameter of decl.sig.parameters) {
+            if (parameter.type === 'Receiver') {
+                let recv = lowerTy(enclosingImpl!.selfTy);
+                if (parameter.ptr) {
+                    recv = { type: 'Pointer', flags: recv.flags, mtb: parameter.ptr, pointee: recv };
+                }
+                patTys.set(parameter, recv);
+            } else {
+                patTys.set(parameter, lowerTy(parameter.ty));
+            }
+        }
         infcx.withFn(ret, () => { typeckExpr(decl.body); });
     }
 
@@ -263,6 +276,13 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             }
             case 'TyAlias': break;
             case 'ExternFnDecl': if (stmt.sig.ret) lowerTy(stmt.sig.ret); break;
+            case 'Impl': {
+                lowerTy(stmt.selfTy);
+                for (const item of stmt.items) {
+                    typeckFn(item.decl, stmt);
+                }
+                break;
+            }
             default: assertUnreachable(stmt);
         }
     }
@@ -317,9 +337,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         // TODO: is EMPTY_FLAGS correct here..?
                         case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
-                        case 'LetDecl': return patTys.get(litres)!;
+                        case 'LetDecl':
                         case 'Binding': return patTys.get(litres)!;
-                        case 'FnParam': return lowerTy(litres.param.ty);
+                        case 'FnParam': return patTys.get(litres.param)!;
                         case 'Variant': return { type: 'Enum', decl: litres.enum, flags: EMPTY_FLAGS };
                         default: assertUnreachable(litres);
                     }
@@ -465,7 +485,15 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
 
                         // with `genericArgs` created we can fix up the signature
                         for (const param of callee.decl.sig.parameters) {
-                            const ty = lowerTy(param.ty);
+                            let ty: Ty;
+                            if (param.type === 'Receiver') {
+                                ty = lowerTy((callee.decl as FnDecl).parent!.selfTy);
+                                if (param.ptr) {
+                                    ty = { type: 'Pointer', flags: ty.flags, mtb: param.ptr, pointee: ty };
+                                }
+                            } else {
+                                ty = lowerTy(param.ty);
+                            }
                             sig.parameters.push(instantiateTy(ty, sig.args));
                         }
                         if (callee.decl.sig.ret) {
@@ -563,6 +591,101 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         infcx.sub('Pattern', expr.span, patTy, scrutineeTy);
                     }
                     return armTy || NEVER;
+                }
+                case 'MethodCall': {
+                    const targetTy = typeckExpr(expr.target);
+                    const derefTargetTy = targetTy.type === 'Pointer' ? targetTy.pointee : targetTy;
+                    if (derefTargetTy.type !== 'Alias') {
+                        throw new Error(`method selection works only on aliases for now (got ${ppTy(targetTy)})`);
+                    }
+
+                    let selectedMethod: { type: 'Fn' } & ImplItem | null = null;
+                    for (const impl of res.impls.get(derefTargetTy.decl)!) {
+                        for (const item of impl.items) {
+                            if (item.type === 'Fn' && item.decl.sig.name === expr.path.ident) {
+                                selectedMethod = item;
+                            }
+                        }
+                    }
+
+                    if (!selectedMethod) {
+                        throw new Error(`method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`);
+                    }
+
+                    if (selectedMethod.decl.sig.parameters[0].type !== 'Receiver') {
+                        throw new Error(`selected method '${expr.path.ident}' does not have a receiver parameter`);
+                    }
+
+                    // const sig = (() => {
+                    //     // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
+                    //     const sig: InstantiatedFnSig = {
+                    //         parameters: [],
+                    //         ret: UNIT,
+                    //         args: []
+                    //     };
+
+                    const genericArgs: Ty[] = [...derefTargetTy.args];
+
+                    if (expr.path.args.length > 0) {
+                        for (const arg of expr.path.args) {
+                            if (arg.ty.type === 'Infer') {
+                                genericArgs.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
+                            } else {
+                                genericArgs.push(lowerTy(arg.ty));
+                            }
+                        }
+                    } else {
+                        for (let i = 0; i < selectedMethod.decl.sig.generics.length; i++) {
+                            const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
+                            genericArgs.push(tv);
+                        }
+                    }
+                    // const sig: InstantiatedFnSig = {
+                    //     args: genericArgs,
+                    //     parameters: [],
+                    //     ret: 
+                    // };
+
+                    const parameters: Ty[] = [];
+                    let ret: Ty;
+                    for (const param of selectedMethod.decl.sig.parameters) {
+                        let ty: Ty;
+                        if (param.type === 'Receiver') {
+                            ty = lowerTy((selectedMethod.decl as FnDecl).parent!.selfTy);
+                            if (param.ptr) {
+                                ty = { type: 'Pointer', flags: ty.flags, mtb: param.ptr, pointee: ty };
+                            }
+                        } else {
+                            ty = lowerTy(param.ty);
+                        }
+                        parameters.push(instantiateTy(ty, genericArgs));
+                    }
+                    if (selectedMethod.decl.sig.ret) {
+                        ret = instantiateTy(lowerTy(selectedMethod.decl.sig.ret), genericArgs);
+                    } else {
+                        ret = UNIT;
+                    }
+
+                    const sig: InstantiatedFnSig = {
+                        args: genericArgs,
+                        parameters,
+                        ret
+                    };
+
+                    instantiatedFnSigs.set(expr, sig);
+                    selectedMethods.set(expr, selectedMethod);
+
+                    if (expr.args.length !== sig.parameters.length - 1) {
+                        throw new Error(`argument length mismatch (${expr.args.length} != ${sig.parameters.length - 1})`);
+                    }
+
+                    infcx.sub('FnArgument', expr.target.span, targetTy, sig.parameters[0]);
+                    for (let i = 0; i < sig.parameters.length - 1; i++) {
+                        // Relate our args with the instantiated signature.
+                        infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i + 1]);
+                    }
+
+                    return sig.ret;
                 }
                 default: assertUnreachable(expr);
             }
@@ -891,5 +1014,5 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         for (const stmt of ast.stmts) visitInStmt(stmt, writebackExpr, writebackStmt);
     }
 
-    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, hadErrors: lub.hadErrors };
+    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, selectedMethods, hadErrors: lub.hadErrors };
 }

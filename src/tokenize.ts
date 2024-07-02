@@ -172,6 +172,8 @@ export function tokenize(src: string): Token[] {
                         case 'enum': ty = TokenType.Enum; break;
                         case 'continue': ty = TokenType.Continue; break;
                         case 'match': ty = TokenType.Match; break;
+                        case 'impl': ty = TokenType.Impl; break;
+                        case 'Self': ty = TokenType.SelfTy; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });

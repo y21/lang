@@ -3,6 +3,7 @@ import { Span, joinSpan, ppSpan } from "./span";
 import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
+import { todo, inspect } from "./util";
 
 export type BinaryOp =
     | TokenType.Plus
@@ -41,6 +42,7 @@ export type Expr = { span: Span } & (
     | { type: 'ByteCharacter', value: string }
     | { type: "Assignment"; op: AssignmentKind, target: Expr; value: Expr }
     | { type: "Property"; target: Expr; property: string | number }
+    | { type: "MethodCall", target: Expr, path: PathSegment<AstTy>, args: Expr[] }
     | { type: "Return"; value: Expr }
     | { type: 'Break' }
     | { type: 'Continue' }
@@ -71,20 +73,38 @@ export type AstFnSignature = {
 export type FnDecl = {
     type: 'FnDecl',
     sig: AstFnSignature,
-    body: Expr
+    body: Expr,
+    parent: Impl | null
 };
 export type ExternFnDecl = {
     type: 'ExternFnDecl'
     abi: 'C' | 'intrinsic',
     sig: AstFnSignature
 };
-export type FnParameter = { name: string, ty: AstTy };
+export type FnParameter = { type: 'Receiver', ptr: Mutability | null } | { type: 'Parameter', name: string, ty: AstTy };
 export type Generics = string[];
 export type TyAliasDecl = { type: 'TyAlias', name: string, generics: Generics, constructibleIn: Path<AstTy>[], alias: AstTy };
 export type GenericArg<Ty> = { type: 'Type', ty: Ty };
 export type PathSegment<Ty> = { ident: string; args: GenericArg<Ty>[] };
 export type Path<Ty> = { segments: PathSegment<Ty>[] };
-export type Stmt = { span: Span } & ({ type: 'Expr', value: Expr } | LetDecl | FnDecl | TyAliasDecl | ExternFnDecl);
+export type ImplItem = {
+    type: 'Fn',
+    decl: FnDecl,
+};
+export type Impl = {
+    type: 'Impl',
+    selfTy: AstTy,
+    generics: Generics,
+    items: ImplItem[]
+}
+export type Stmt = { span: Span } & (
+    | { type: 'Expr', value: Expr }
+    | LetDecl
+    | FnDecl
+    | TyAliasDecl
+    | ExternFnDecl
+    | Impl
+);
 export type Mutability = 'imm' | 'mut';
 export type RecordFields<Ty> = ([string, Ty])[];
 export type AstVariant = { name: string };
@@ -117,8 +137,8 @@ export type Pat = { span: Span } & (
 
 export type AstArm = { pat: Pat, body: Expr };
 
-export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl): Generics {
-    if (decl.type === 'TyAlias') return decl.generics;
+export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl | Impl): Generics {
+    if (decl.type === 'TyAlias' || decl.type === 'Impl') return decl.generics;
     else return decl.sig.generics;
 }
 
@@ -683,7 +703,41 @@ export function parse(src: string): Program {
                         case TokenType.Number: property = +snip(tokens[i++].span); break;
                         default: throw new Error('property must be a string or number');
                     }
-                    expr = { type: 'Property', target: expr, property, span: [expr.span[0], tokens[i - 1].span[1]] }
+
+                    // After the 'property', if we see :: or ( then this is a method call.
+                    let genericArgs: GenericArg<AstTy>[] = [];
+                    switch (tokens[i].ty) {
+                        case TokenType.Colon: {
+                            i++;
+                            eatToken(TokenType.Colon);
+                            eatToken(TokenType.Lt);
+                            while (!eatToken(TokenType.Gt, false)) {
+                                if (genericArgs.length > 0) {
+                                    eatToken(TokenType.Comma);
+                                }
+                                genericArgs.push({ type: 'Type', ty: parseTy() });
+                            }
+                            eatToken(TokenType.LParen);
+                            // back to ')' because we immediately increment it again due to fallthrough
+                            i--;
+                        }
+                        case TokenType.LParen: {
+                            i++;
+                            const args: Expr[] = [];
+                            while (!eatToken(TokenType.RParen, false)) {
+                                args.push(parseRootExpr());
+                            }
+                            if (typeof property !== 'string') {
+                                throw new Error('method call property cannot be a number');
+                            }
+
+                            expr = { type: 'MethodCall', args, path: { args: genericArgs, ident: property }, target: expr, span: joinSpan(expr.span, tokens[i - 1].span) };
+                            break;
+                        }
+                        default:
+                            expr = { type: 'Property', target: expr, property, span: [expr.span[0], tokens[i - 1].span[1]] }
+                    }
+
                     break;
                 }
                 case TokenType.Plus:
@@ -747,10 +801,17 @@ export function parse(src: string): Program {
         eatToken(TokenType.LParen);
         while (!eatToken(TokenType.RParen, false)) {
             eatToken(TokenType.Comma, false);
-            const name = expectIdent();
-            eatToken(TokenType.Colon);
-            const ty = parseTy();
-            parameters.push({ name, ty });
+            if (tokens[i].ty === TokenType.Ident && snip(tokens[i].span) === 'self') {
+                i++;
+                // Receiver.
+                let ptr = eatToken(TokenType.Star, false);
+                parameters.push({ type: 'Receiver', ptr: ptr ? 'imm' : null });
+            } else {
+                const name = expectIdent();
+                eatToken(TokenType.Colon);
+                const ty = parseTy();
+                parameters.push({ type: 'Parameter', name, ty });
+            }
         }
 
         const ret = eatToken(TokenType.Colon, false) ? parseTy() : undefined;
@@ -793,6 +854,7 @@ export function parse(src: string): Program {
                     type: 'FnDecl',
                     body,
                     span: joinSpan(startSpan, tokens[i - 1].span),
+                    parent: null,
                     sig
                 };
             }
@@ -832,6 +894,29 @@ export function parse(src: string): Program {
                 aliasTyName = null;
                 eatToken(TokenType.Semi);
                 return { span: [tySpan[0], tokens[i - 1].span[1]], type: 'TyAlias', name, alias, constructibleIn, generics };
+            }
+            case TokenType.Impl: {
+                const implKwSpan = tokens[i].span;
+                i++;
+                const generics = parseGenericsList();
+                const selfTy = parseTy();
+                eatToken(TokenType.LBrace);
+
+                const items: ImplItem[] = [];
+                let impl: { span: Span } & Impl = { type: 'Impl', items, selfTy, generics, span: implKwSpan };
+                while (!eatToken(TokenType.RBrace, false)) {
+                    // Parse associated items.
+                    const item = parseStmtOrTailExpr();
+                    if (item.type !== 'FnDecl') {
+                        throw new Error('only functions are supported in impls for now');
+                    }
+                    item.parent = impl;
+
+                    items.push({ type: 'Fn', decl: item });
+                }
+                impl.span = joinSpan(implKwSpan, tokens[i - 1].span);
+
+                return impl;
             }
             default: {
                 const value = parseRootExpr();

@@ -2,7 +2,7 @@ import { inspect as _inspect } from 'util';
 import { options } from './cli';
 
 export function assertUnreachable(v: never): never {
-    throw 'impossible';
+    throw new Error('impossible');
 }
 
 /**

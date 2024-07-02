@@ -1,4 +1,4 @@
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -64,11 +64,11 @@ function identPathTy(ident: string): AstTy {
 }
 
 const INTRINSICS: Intrinsic[] = [
-    mkIntrinsic('bitcast', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
-    mkIntrinsic('ext', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U')),
-    mkIntrinsic('trunc', ['T', 'U'], [{ name: 'v', ty: identPathTy('T') }], identPathTy('U'))
+    mkIntrinsic('bitcast', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('ext', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
+    mkIntrinsic('trunc', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U'))
 ];
-export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl };
+export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl };
 export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy);
 export type BindingPat = { type: 'Binding', ident: string };
 export type PatResolution = VariantResolution | BindingPat;
@@ -82,6 +82,7 @@ export type Resolutions = {
     valueResolutions: ValueResolutions,
     patResolutions: PatResolutions,
     breakableResolutions: Map<Expr, Breakable>,
+    impls: Map<TypeResolution, Impl[]>,
     entrypoint: FnDecl
 };
 
@@ -116,6 +117,7 @@ export function computeResolutions(ast: Program): Resolutions {
     const exprMap: Map<Expr, ValueResolution> = new Map();
     const patMap: Map<Pat, PatResolution> = new Map();
     const breakableMap: Map<Expr, Breakable> = new Map();
+    const impls: Map<TypeResolution, Impl[]> = new Map();
 
     const withAllScopes = (f: () => void) => {
         tyRes.withScope(() => {
@@ -214,6 +216,35 @@ export function computeResolutions(ast: Program): Resolutions {
                     }
                 });
                 tyAliasScope = null;
+                break;
+            }
+            case 'Impl': {
+                tyRes.withScope(() => {
+                    if (stmt.selfTy.type !== 'Path') {
+                        throw new Error('impl self type must be a path');
+                    }
+                    const resolved = tyRes.find(stmt.selfTy.value.segments[0].ident);
+                    if (!resolved || resolved.type !== 'TyAlias') {
+                        throw new Error('impl self type must resolve to a type alias');
+                    }
+                    const curImpls = impls.get(resolved);
+                    if (curImpls) {
+                        curImpls.push(stmt);
+                    } else {
+                        impls.set(resolved, [stmt]);
+                    }
+
+                    for (let i = 0; i < stmt.generics.length; i++) {
+                        tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
+                    }
+                    resolveTy(stmt.selfTy);
+                    for (const item of stmt.items) {
+                        switch (item.type) {
+                            case 'Fn': resolveFnDecl(item.decl); break;
+                            default: assertUnreachable(item.type);
+                        }
+                    }
+                });
                 break;
             }
             default: assertUnreachable(stmt);
@@ -353,6 +384,12 @@ export function computeResolutions(ast: Program): Resolutions {
                 }
                 break;
             }
+            case 'MethodCall': {
+                for (const arg of expr.args) resolveExpr(arg);
+                for (const arg of expr.path.args) resolveTy(arg.ty);
+                resolveExpr(expr.target);
+                break;
+            }
             default: assertUnreachable(expr);
         }
     }
@@ -363,8 +400,10 @@ export function computeResolutions(ast: Program): Resolutions {
         }
 
         for (const param of sig.parameters) {
-            valRes.add(param.name, { type: 'FnParam', param });
-            resolveTy(param.ty);
+            valRes.add(param.type === 'Receiver' ? 'self' : param.name, { type: 'FnParam', param });
+            if (param.type === 'Parameter') {
+                resolveTy(param.ty);
+            }
         }
 
         if (sig.ret) {
@@ -402,5 +441,5 @@ export function computeResolutions(ast: Program): Resolutions {
         throw "'main' function not found";
     }
 
-    return { tyResolutions: tyMap, valueResolutions: exprMap, breakableResolutions: breakableMap, patResolutions: patMap, entrypoint };
+    return { tyResolutions: tyMap, valueResolutions: exprMap, breakableResolutions: breakableMap, patResolutions: patMap, entrypoint, impls };
 }
