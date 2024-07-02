@@ -50,6 +50,7 @@ export const U16: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, valu
 export const U32: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
 export const U64: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
 export const UNIT: Ty & { type: 'Tuple' } = { type: 'Tuple', flags: EMPTY_FLAGS, elements: [] };
+export const NEVER: Ty & { type: 'never' } = { type: 'never', flags: EMPTY_FLAGS };
 export const BOOL: Ty & { type: 'bool' } = { type: 'bool', flags: EMPTY_FLAGS };
 export const STR_SLICE: Ty & { type: 'Pointer' } = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'str', flags: EMPTY_FLAGS } };
 

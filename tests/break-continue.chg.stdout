@@ -46,7 +46,7 @@ br i1 true, label %bb.2, label %bb.3
 bb.2:
 %l.2 = load i32, i32* %l.1
 %l.3 = icmp sge i32 %l.2, 10
-br i1 %l.3, label %bb.5, label %bb.4
+br i1 %l.3, label %bb.4, label %bb.5
 
 bb.3:
 %l.10 = load i32, i32* %l.1
@@ -55,30 +55,30 @@ store i32 %l.10, i32* %l.0
 ret i32 %ret.0
 
 bb.4:
-%l.4 = load i32, i32* %l.1
-%l.5 = icmp eq i32 %l.4, 5
-br i1 %l.5, label %bb.8, label %bb.7
-
-bb.5:
 br label %bb.3
 
+bb.5:
+%l.4 = load i32, i32* %l.1
+%l.5 = icmp eq i32 %l.4, 5
+br i1 %l.5, label %bb.7, label %bb.8
+
 bb.6:
-br label %bb.4
+br label %bb.5
 
 bb.7:
-%l.8 = load i32, i32* %l.1
-%l.9 = add i32 %l.8, 1
-store i32 %l.9, i32* %l.1
-br label %bb.1
-
-bb.8:
 %l.6 = load i32, i32* %l.1
 %l.7 = add i32 %l.6, 2
 store i32 %l.7, i32* %l.1
 br label %bb.1
 
+bb.8:
+%l.8 = load i32, i32* %l.1
+%l.9 = add i32 %l.8, 1
+store i32 %l.9, i32* %l.1
+br label %bb.1
+
 bb.9:
-br label %bb.7
+br label %bb.8
 
 }
 

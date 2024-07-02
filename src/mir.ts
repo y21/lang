@@ -480,16 +480,49 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 case 'Bool': return { type: 'bool', value: expr.value };
                 case 'If': {
                     const condition = asValue(lowerExpr(expr.condition), BOOL);
-                    const joinedBlock = addBlock();
                     const thenBlock = addBlock();
-                    block.terminator = { type: 'Conditional', else: joinedBlock, then: thenBlock, condition };
+                    const elseBlock = expr.else ? addBlock() : null;
+                    const joinedBlock = addBlock();
+                    const ty = typeck.exprTys.get(expr)!;
+                    const res: MirPlace | null = expr.then.tailExpr ? { base: addLocal(ty, false), projections: [] } : null;
+                    block.terminator = { type: 'Conditional', then: thenBlock, else: elseBlock ?? joinedBlock, condition };
 
                     block = blocks[thenBlock];
-                    lowerExpr(expr.then);
+                    const thenVal = asValue(lowerExpr(expr.then), ty);
+                    if (res) {
+                        block.stmts.push({
+                            type: 'Assignment',
+                            assignee: res,
+                            value: thenVal
+                        });
+                    }
                     block.terminator = { type: 'Jump', target: joinedBlock };
 
+                    if (expr.else && elseBlock !== null) {
+                        block = blocks[elseBlock];
+                        const elseVal = asValue(lowerExpr(expr.else), ty);
+                        if (res) {
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee: res,
+                                value: elseVal
+                            });
+                        }
+                        block.terminator = { type: 'Jump', target: joinedBlock };
+                    }
+
                     block = blocks[joinedBlock];
-                    return UNIT_MIR;
+                    if (res) {
+                        const copyRes = addLocal(ty, true);
+                        block.stmts.push({
+                            type: 'Copy',
+                            assignee: copyRes,
+                            place: res
+                        });
+                        return { type: 'Local', value: copyRes };
+                    } else {
+                        return UNIT_MIR;
+                    }
                 }
                 case 'While':
                     const conditionBlock = addBlock();
@@ -544,7 +577,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     block = blocks[next];
                     return { type: 'Unreachable' };
                 }
-                case 'Match':
+                case 'Match': {
                     // For now, simply compile the match to a series of if-else-if, with the binding pattern acting as 'else'
                     //
                     //     let v = Enum::Variant1;
@@ -583,6 +616,8 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     // In body branches, we begin by extracting bindings out of patterns and then execute normal code. At the end, we always jump to a joined block.
                     const bodyBranches = expr.arms.map(() => addBlock());
                     const joinBlock = addBlock();
+                    const matchTy = typeck.exprTys.get(expr)!;
+                    const resPlace: MirPlace | null = isUnit(matchTy) ? null : { base: addLocal(matchTy, false), projections: [] };
 
                     const scrutinee = lowerExpr(expr.scrutinee);
                     const scrutineeTy = typeck.exprTys.get(expr.scrutinee)!;
@@ -671,12 +706,31 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                 break;
                             }
                         }
-                        lowerExpr(arm.body);
+                        const bodyValue = asValue(lowerExpr(arm.body), typeck.exprTys.get(arm.body)!);
+                        if (resPlace) {
+                            block.stmts.push({
+                                type: 'Assignment',
+                                assignee: resPlace,
+                                value: bodyValue
+                            });
+                        }
                         block.terminator = { type: 'Jump', target: joinBlock };
                     }
 
                     block = blocks[joinBlock];
-                    return UNIT_MIR;
+
+                    if (resPlace) {
+                        const copyRes = addLocal(matchTy, true);
+                        block.stmts.push({
+                            type: 'Copy',
+                            assignee: copyRes,
+                            place: resPlace
+                        });
+                        return { type: 'Local', value: copyRes };
+                    } else {
+                        return UNIT_MIR;
+                    }
+                }
                 default: assertUnreachable(expr);
             }
         }

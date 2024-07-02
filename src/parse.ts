@@ -55,7 +55,7 @@ export type Expr = { span: Span } & (
     | { type: "AddrOf"; pointee: Expr; mtb: Mutability }
     | { type: "Deref"; pointee: Expr }
     | { type: "Record"; fields: RecordFields<Expr> }
-    | { type: "If"; condition: Expr; then: Expr; else: Expr | null }
+    | { type: "If"; condition: Expr; then: { type: 'Block' } & Expr; else: ({ type: 'If' | 'Block' } & Expr) | null }
     | { type: "While"; condition: Expr; body: Expr }
     | { type: "Tuple", elements: Expr[] }
 );
@@ -599,8 +599,14 @@ export function parse(src: string): Program {
                 const ifSpan = tokens[i++].span;
                 const condition = parseRootExpr();
                 const body = parseBlockExpr();
-                // TODO: else
-                expr = { type: 'If', condition, then: body, else: null, span: joinSpan(ifSpan, tokens[i - 1].span) };
+                let _else: Expr | null = null;
+                if (eatToken(TokenType.Else, false)) {
+                    _else = parseRootExpr();
+                    if (_else.type !== 'Block' && _else.type !== 'If') {
+                        throw new Error('else expression must be a block or another chained `if` expression');
+                    }
+                }
+                expr = { type: 'If', condition, then: body, else: _else, span: joinSpan(ifSpan, tokens[i - 1].span) };
                 break;
             }
             case TokenType.While: {

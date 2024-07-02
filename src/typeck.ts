@@ -3,12 +3,12 @@ import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, 
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8 } from "./ty";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER } from "./ty";
 import { assert, assertUnreachable, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern';
+type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock';
 type Constraint = { cause: ConstraintCause, at: Span, depth: number } & ConstraintType;
 const MAX_CONSTRAINT_DEPTH = 200;
 
@@ -488,7 +488,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
 
                     return sig.ret;
                 }
-                case 'Property':
+                case 'Property': {
                     const target = normalize(typeckExpr(expr.target));
                     switch (target.type) {
                         case 'Record':
@@ -508,13 +508,19 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         default:
                             throw new Error(`property access requires record or tuple type, got ${ppTy(target)}`);
                     }
-                case 'If':
+                }
+                case 'If': {
                     infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
-                    typeckExpr(expr.then);
+                    const thenTy = typeckExpr(expr.then);
                     if (expr.else) {
-                        typeckExpr(expr.else);
+                        const elseTy = typeckExpr(expr.else);
+                        infcx.sub('JoinBlock', expr.span, thenTy, elseTy);
+                        return thenTy;
+                    } else {
+                        infcx.sub('JoinBlock', expr.span, thenTy, UNIT);
+                        return UNIT;
                     }
-                    return UNIT;
+                }
                 case 'While':
                     infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
                     typeckExpr(expr.body);
@@ -545,12 +551,18 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     return { type: 'never', flags: EMPTY_FLAGS };
                 case 'Match': {
                     const scrutineeTy = typeckExpr(expr.scrutinee);
+                    let armTy: Ty | null = null;
                     for (const arm of expr.arms) {
                         const patTy = typeckPat(arm.pat);
-                        typeckExpr(arm.body);
+                        const bodyTy = typeckExpr(arm.body);
+                        if (armTy) {
+                            infcx.sub('JoinBlock', arm.body.span, bodyTy, armTy)
+                        } else {
+                            armTy = bodyTy;
+                        }
                         infcx.sub('Pattern', expr.span, patTy, scrutineeTy);
                     }
-                    return UNIT;
+                    return armTy || NEVER;
                 }
                 default: assertUnreachable(expr);
             }

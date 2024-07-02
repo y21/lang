@@ -165,6 +165,7 @@ export function tokenize(src: string): Token[] {
                         case 'true': ty = TokenType.True; break;
                         case 'false': ty = TokenType.False; break;
                         case 'if': ty = TokenType.If; break;
+                        case 'else': ty = TokenType.Else; break;
                         case 'for': ty = TokenType.For; break;
                         case 'while': ty = TokenType.While; break;
                         case 'break': ty = TokenType.Break; break;

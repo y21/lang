@@ -7,6 +7,7 @@ export enum TokenType {
     Let,
     Return,
     If,
+    Else,
     For,
     While,
     Match,

@@ -4,6 +4,6 @@ expr @ 6:31 6:32 => i32
 expr @ 6:24 6:32 => never
 expr @ 7:31 8:0 => i32
 expr @ 7:24 8:0 => never
-expr @ 5:5 8:6 => ()
+expr @ 5:5 8:6 => never
 expr @ 3:16 10:1 => ()
 
