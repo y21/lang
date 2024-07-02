@@ -301,7 +301,16 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
     function typeckExpr(expr: Expr): Ty {
         function inner(expr: Expr): Ty {
             switch (expr.type) {
-                case 'Block': for (const stmt of expr.stmts) typeckStmt(stmt); return UNIT;
+                case 'Block': {
+                    for (const stmt of expr.stmts) {
+                        typeckStmt(stmt);
+                    }
+                    if (expr.tailExpr) {
+                        return typeckExpr(expr.tailExpr);
+                    } else {
+                        return UNIT;
+                    }
+                }
                 case 'Path': {
                     const litres = res.valueResolutions.get(expr)!;
                     switch (litres.type) {

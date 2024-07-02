@@ -291,7 +291,6 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             return { type: 'Local', value: res };
                         }
                     }
-                    todo();
                 }
                 case 'Unary': {
                     const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
@@ -513,7 +512,11 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     for (const stmt of expr.stmts) {
                         lowerStmt(stmt);
                     }
-                    return UNIT_MIR;
+                    if (expr.tailExpr) {
+                        return lowerExpr(expr.tailExpr);
+                    } else {
+                        return UNIT_MIR;
+                    }
                 }
                 case 'Tuple': {
                     const elements: MirValue[] = expr.elements.map(expr => {

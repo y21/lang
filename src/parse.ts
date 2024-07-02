@@ -1,5 +1,5 @@
 import { assert } from "console";
-import { Span, joinSpan } from "./span";
+import { Span, joinSpan, ppSpan } from "./span";
 import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
@@ -29,7 +29,7 @@ export type AssignmentKind = TokenType.Assign
     | TokenType.RemAssign;
 
 export type Expr = { span: Span } & (
-    | { type: "Block"; stmts: Stmt[] }
+    | { type: "Block"; stmts: Stmt[], tailExpr: Expr | null }
     | { type: "Path"; path: Path<AstTy> }
     | { type: "FnCall"; args: Expr[]; callee: Expr }
     | { type: "Index"; target: Expr; index: Expr }
@@ -557,10 +557,17 @@ export function parse(src: string): Program {
             case TokenType.LBrace: {
                 const lbraceSpan = tokens[i++].span;
                 const stmts = [];
+                let tailExpr: Expr | null = null;
                 while (!eatToken(TokenType.RBrace, false)) {
-                    stmts.push(parseStmt());
+                    const stmt = parseStmtOrTailExpr();
+                    if (stmt.type === 'TailExpr') {
+                        tailExpr = stmt.value;
+                        break;
+                    } else {
+                        stmts.push(stmt);
+                    }
                 }
-                expr = { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts };
+                expr = { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts, tailExpr };
                 break;
             }
             case TokenType.LParen: {
@@ -750,7 +757,7 @@ export function parse(src: string): Program {
         };
     }
 
-    function parseStmt(): Stmt {
+    function parseStmtOrTailExpr(): Stmt | { type: 'TailExpr', value: Expr } {
         const startSpan = tokens[i].span;
         switch (tokens[i].ty) {
             case TokenType.Extern: {
@@ -822,9 +829,23 @@ export function parse(src: string): Program {
             }
             default: {
                 const value = parseRootExpr();
-                eatToken(TokenType.Semi);
-                return { span: [value.span[0], tokens[i - 1].span[1]], type: 'Expr', value };
+                if (eatToken(TokenType.Semi, false)) {
+                    return { span: [value.span[0], tokens[i - 1].span[1]], type: 'Expr', value };
+                } else {
+                    // Trailing expressions must be followed by the end of the block, i.e. the `}`
+                    eatToken(TokenType.RBrace);
+                    return { type: 'TailExpr', value };
+                }
             }
+        }
+    }
+
+    function parseStmt(): Stmt {
+        const stmt = parseStmtOrTailExpr();
+        if (stmt.type === 'TailExpr') {
+            throw new Error('no trailing expression expected at ' + ppSpan(src, stmt.value.span));
+        } else {
+            return stmt;
         }
     }
 

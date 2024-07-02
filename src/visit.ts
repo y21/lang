@@ -26,7 +26,10 @@ export function visitInExpr(expr: Expr, forExpr: (e: Expr) => void, forStmt: (s:
         case 'Bool':
         case 'String':
         case 'ByteCharacter': break;
-        case 'Block': for (const stmt of expr.stmts) visitInStmt(stmt, forExpr, forStmt); break;
+        case 'Block':
+            for (const stmt of expr.stmts) visitInStmt(stmt, forExpr, forStmt);
+            if (expr.tailExpr) visitInExpr(expr.tailExpr, forExpr, forStmt);
+            break;
         case 'Return': visitInExpr(expr.value, forExpr, forStmt); break;
         case 'ArrayLiteral': for (const elem of expr.elements) visitInExpr(elem, forExpr, forStmt); break;
         case 'ArrayRepeat': visitInExpr(expr.element, forExpr, forStmt); break;

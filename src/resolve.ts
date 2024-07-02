@@ -271,7 +271,10 @@ export function computeResolutions(ast: Program): Resolutions {
                     default: throw new Error('only 1-2 path segments are currently supported');
                 }
                 break;
-            case 'Block': for (const stmt of expr.stmts) resolveStmt(stmt); break;
+            case 'Block':
+                for (const stmt of expr.stmts) resolveStmt(stmt);
+                if (expr.tailExpr) resolveExpr(expr.tailExpr)
+                break;
             case 'Return': resolveExpr(expr.value); break;
             case 'ArrayLiteral': for (const e of expr.elements) resolveExpr(e); break;
             case 'ArrayRepeat': resolveExpr(expr.element); break;
