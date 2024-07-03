@@ -9,5 +9,6 @@ fn main(): i32 {
   let v: V<i32> = .{ value: 42 };
   free(&v);
   V::<i32>::foo(&v);
+  V::foo(&v);
   return *(&v).foo();
 }

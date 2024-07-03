@@ -1,5 +1,5 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem } from "./parse";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
@@ -463,20 +463,26 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             args: []
                         };
 
-                        let segments: PathSegment<AstTy>[];
+                        let segmentsAndGenerics: [PathSegment<AstTy>, Generics][];
                         if (callee.type === 'FnDef' && callee.decl.parent !== null) {
                             // This is a call to an associated function.
                             // The parent `impl` can have generics that we need to subtitute also
 
-                            segments = expr.callee.path.segments.slice(-2);
+                            const [ty, assoc] = expr.callee.path.segments.slice(-2);
+                            segmentsAndGenerics = [
+                                [ty, callee.decl.parent.generics],
+                                [assoc, callee.decl.sig.generics],
+                            ]
                         } else {
                             // This is a call to a free function.
-                            segments = expr.callee.path.segments.slice(-1);
+                            segmentsAndGenerics = [
+                                [expr.callee.path.segments[0], callee.decl.sig.generics]
+                            ];
                         }
 
-                        for (const segment of segments) {
+                        for (const [segment, generics] of segmentsAndGenerics) {
                             if (segment.args.length === 0) {
-                                for (let i = 0; i < callee.decl.sig.generics.length; i++) {
+                                for (let i = 0; i < generics.length; i++) {
                                     sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
                                 }
                             } else {

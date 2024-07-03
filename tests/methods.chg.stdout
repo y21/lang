@@ -15,12 +15,16 @@ expr @ 11:13 11:16 => fn foo(...)
 expr @ 11:18 11:19 => V<i32>
 expr @ 11:17 11:19 => V<i32>*
 expr @ 11:13 11:20 => i32*
-expr @ 12:13 12:14 => V<i32>
-expr @ 12:12 12:14 => V<i32>*
-expr @ 12:12 12:21 => i32*
-expr @ 12:10 12:21 => i32
-expr @ 12:3 12:21 => never
-expr @ 8:16 14:1 => ()
+expr @ 12:6 12:9 => fn foo(...)
+expr @ 12:11 12:12 => V<i32>
+expr @ 12:10 12:12 => V<i32>*
+expr @ 12:6 12:13 => i32*
+expr @ 13:13 13:14 => V<i32>
+expr @ 13:12 13:14 => V<i32>*
+expr @ 13:12 13:21 => i32*
+expr @ 13:10 13:21 => i32
+expr @ 13:3 13:21 => never
+expr @ 8:16 15:1 => ()
 
 
 
@@ -74,16 +78,21 @@ bb.1:
 br label %bb.2
 
 bb.2:
-%l.6 = bitcast {i32}* %l.1 to {i32}*
-%l.7 = call i32* @foo$LT$i32$GT$({i32}* %l.6)
+%l.7 = bitcast {i32}* %l.1 to {i32}*
+%l.6 = call i32* @foo$LT$i32$GT$({i32}* %l.7)
 br label %bb.3
 
 bb.3:
+%l.8 = bitcast {i32}* %l.1 to {i32}*
+%l.9 = call i32* @foo$LT$i32$GT$({i32}* %l.8)
+br label %bb.4
+
+bb.4:
 %t.3 = alloca i32*
-store i32* %l.7, i32** %t.3
+store i32* %l.9, i32** %t.3
 %t.4 = load i32*, i32** %t.3
-%l.8 = load i32, i32* %t.4
-store i32 %l.8, i32* %l.0
+%l.10 = load i32, i32* %t.4
+store i32 %l.10, i32* %l.0
 %ret.5 = load i32, i32* %l.0
 ret i32 %ret.5
 
