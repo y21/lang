@@ -1,0 +1,92 @@
+expr @ 4:33 4:37 => V<T>*
+expr @ 4:32 4:37 => V<T>
+expr @ 4:32 4:44 => T
+expr @ 4:30 4:44 => T*
+expr @ 4:23 4:44 => never
+expr @ 4:21 5:0 => ()
+expr @ 6:22 7:0 => ()
+expr @ 9:29 9:31 => i32
+expr @ 9:19 9:33 => {value: i32}
+expr @ 10:3 10:7 => fn free(...)
+expr @ 10:9 10:10 => V<i32>
+expr @ 10:8 10:10 => V<i32>*
+expr @ 10:3 10:11 => ()
+expr @ 11:13 11:16 => fn foo(...)
+expr @ 11:18 11:19 => V<i32>
+expr @ 11:17 11:19 => V<i32>*
+expr @ 11:13 11:20 => i32*
+expr @ 12:13 12:14 => V<i32>
+expr @ 12:12 12:14 => V<i32>*
+expr @ 12:12 12:21 => i32*
+expr @ 12:10 12:21 => i32
+expr @ 12:3 12:21 => never
+expr @ 8:16 14:1 => ()
+
+
+
+define void @free$LT$i32$GT$({i32}* %lt.0) {
+prologue:
+%l.0 = alloca {i32}*
+store {i32}* %lt.0, {i32}** %l.0
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define i32* @foo$LT$i32$GT$({i32}* %lt.1) {
+prologue:
+%l.0 = alloca i32*
+%l.1 = alloca {i32}*
+store {i32}* %lt.1, {i32}** %l.1
+br label %bb.0
+
+bb.0:
+%t.0 = load {i32}*, {i32}** %l.1
+%t.1 = getelementptr {i32}, {i32}* %t.0, i32 0, i32 0
+%l.2 = bitcast i32* %t.1 to i32*
+store i32* %l.2, i32** %l.0
+%ret.2 = load i32*, i32** %l.0
+ret i32* %ret.2
+
+}
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca {i32}
+br label %bb.0
+
+bb.0:
+%t.0 = alloca {i32}
+%p.1 = getelementptr {i32}, {i32}* %t.0, i32 0, i32 0
+store i32 42, i32* %p.1
+%t.2 = load {i32}, {i32}* %t.0
+store {i32} %t.2, {i32}* %l.1
+%l.3 = bitcast {i32}* %l.1 to {i32}*
+%l.2 = call {} bitcast(void({i32}*)* @free$LT$i32$GT$ to {}({i32}*)*)({i32}* %l.3)
+br label %bb.1
+
+bb.1:
+%l.5 = bitcast {i32}* %l.1 to {i32}*
+%l.4 = call i32* @foo$LT$i32$GT$({i32}* %l.5)
+br label %bb.2
+
+bb.2:
+%l.6 = bitcast {i32}* %l.1 to {i32}*
+%l.7 = call i32* @foo$LT$i32$GT$({i32}* %l.6)
+br label %bb.3
+
+bb.3:
+%t.3 = alloca i32*
+store i32* %l.7, i32** %t.3
+%t.4 = load i32*, i32** %t.3
+%l.8 = load i32, i32* %t.4
+store i32 %l.8, i32* %l.0
+%ret.5 = load i32, i32* %l.0
+ret i32 %ret.5
+
+}
+
+

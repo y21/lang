@@ -1,0 +1,13 @@
+type V<T> = { value: T };
+
+impl<T> V<T> {
+  fn foo(self*): T* { return &(*self).value; }
+}
+fn free<T>(s: V<T>*) {}
+
+fn main(): i32 {
+  let v: V<i32> = .{ value: 42 };
+  free(&v);
+  V::<i32>::foo(&v);
+  return *(&v).foo();
+}

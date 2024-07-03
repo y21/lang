@@ -451,8 +451,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 case 'FnCall': {
                     const sig = (() => {
                         const callee = typeckExpr(expr.callee);
-                        if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef') {
-                            throw new Error('callee must be a FnDef');
+                        if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef' || expr.callee.type !== 'Path') {
+                            // TODO: move the substitution stuff to typechecking paths specifically
+                            throw new Error('callee must be a path to a FnDef');
                         }
 
                         // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
@@ -463,23 +464,29 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         };
 
                         let segments: PathSegment<AstTy>[];
-                        let segment: PathSegment<AstTy>;
+                        if (callee.type === 'FnDef' && callee.decl.parent !== null) {
+                            // This is a call to an associated function.
+                            // The parent `impl` can have generics that we need to subtitute also
 
-                        if (
-                            expr.callee.type === 'Path'
-                            && (segments = expr.callee.path.segments)
-                            && (segment = segments[segments.length - 1])
-                            && segment.args.length > 0
-                        ) {
-                            sig.args = segment.args.map(ty => {
-                                return ty.ty.type === 'Infer'
-                                    ? infcx.mkTyVar({ type: 'GenericArg', span: expr.span })
-                                    : lowerTy(ty.ty)
-                            });
+                            segments = expr.callee.path.segments.slice(-2);
                         } else {
-                            for (let i = 0; i < callee.decl.sig.generics.length; i++) {
-                                const tv = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
-                                sig.args.push(tv);
+                            // This is a call to a free function.
+                            segments = expr.callee.path.segments.slice(-1);
+                        }
+
+                        for (const segment of segments) {
+                            if (segment.args.length === 0) {
+                                for (let i = 0; i < callee.decl.sig.generics.length; i++) {
+                                    sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
+                                }
+                            } else {
+                                for (const arg of segment.args) {
+                                    if (arg.ty.type === 'Infer') {
+                                        sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
+                                    } else {
+                                        sig.args.push(lowerTy(arg.ty));
+                                    }
+                                }
                             }
                         }
 

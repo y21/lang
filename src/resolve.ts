@@ -1,4 +1,4 @@
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -252,7 +252,7 @@ export function computeResolutions(ast: Program): Resolutions {
     }
 
     function resolveEnumPath(path: Path<AstTy>): VariantResolution {
-        const [def, variant] = path.segments;
+        const [def, variant] = path.segments.slice(-2);
         const defRes = tyRes.find(def.ident);
         if (!defRes || defRes.type !== 'Enum') {
             throw new Error(`first path segment must be an enum, got ${defRes?.type}`);
@@ -294,12 +294,43 @@ export function computeResolutions(ast: Program): Resolutions {
                         }
                         break;
                     }
-                    case 2: {
-                        // Enum variants
-                        exprMap.set(expr, resolveEnumPath(expr.path));
-                        break;
+                    default: {
+                        const segments = expr.path.segments.values();
+                        let segment: IteratorResult<PathSegment<AstTy>>;
+
+                        let currentTy: null | TypeResolution = null;
+
+                        while (!(segment = segments.next()).done) {
+                            for (const arg of segment.value.args) resolveTy(arg.ty);
+
+                            switch (currentTy?.type) {
+                                case 'TyAlias': {
+                                    const selectedItem = impls.get(currentTy)
+                                        ?.map(v => v.items.find(item => item.decl.sig.name === segment.value.ident))
+                                        ?.[0];
+
+                                    if (!selectedItem || selectedItem.type !== 'Fn') {
+                                        throw new Error('unimplemented segment');
+                                    }
+
+                                    exprMap.set(expr, selectedItem.decl);
+                                    break;
+                                }
+                                case 'Enum': {
+                                    const variant = currentTy.variants.findIndex(variant => variant.name === segment.value.ident);
+                                    if (variant === -1) {
+                                        throw new Error(`variant '${segment.value.ident}' not found on enum ${currentTy.name}`);
+                                    }
+                                    exprMap.set(expr, resolveEnumPath(expr.path));
+                                    break;
+                                }
+                                case undefined:
+                                    currentTy = tyRes.find(segment.value.ident);
+                                    break;
+                                default: throw new Error(`unimplemented path on type ${currentTy?.type}`);
+                            }
+                        }
                     }
-                    default: throw new Error('only 1-2 path segments are currently supported');
                 }
                 break;
             case 'Block':
