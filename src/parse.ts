@@ -96,7 +96,15 @@ export type Impl = {
     selfTy: AstTy,
     generics: Generics,
     items: ImplItem[]
-}
+};
+export type ModType = 'Outlined' | 'Inline';
+export type ModItem = { type: 'Mod' | 'FnDecl' | 'TyAlias' } & Stmt;
+export type Mod = {
+    type: 'Mod',
+    modType: ModType
+    name: string,
+    items: ModItem[]
+};
 export type Stmt = { span: Span } & (
     | { type: 'Expr', value: Expr }
     | LetDecl
@@ -104,6 +112,7 @@ export type Stmt = { span: Span } & (
     | TyAliasDecl
     | ExternFnDecl
     | Impl
+    | Mod
 );
 export type Mutability = 'imm' | 'mut';
 export type RecordFields<Ty> = ([string, Ty])[];
@@ -894,6 +903,31 @@ export function parse(src: string): Program {
                 aliasTyName = null;
                 eatToken(TokenType.Semi);
                 return { span: [tySpan[0], tokens[i - 1].span[1]], type: 'TyAlias', name, alias, constructibleIn, generics };
+            }
+            case TokenType.Mod: {
+                const modKwSpan = tokens[i++].span;
+                const name = expectIdent();
+                if (eatToken(TokenType.LBrace, false)) {
+                    // Inline.
+                    const items: ModItem[] = [];
+                    while (!eatToken(TokenType.RBrace, false)) {
+                        const stmt = parseStmt();
+                        switch (stmt.type) {
+                            case 'Mod':
+                            case 'TyAlias':
+                            case 'FnDecl':
+                                items.push(stmt);
+                                break;
+                            default:
+                                throw new Error(`${stmt.type} cannot appear in modules`);
+                        }
+                    }
+
+                    return { type: 'Mod', modType: 'Inline', items, name, span: joinSpan(modKwSpan, tokens[i - 1].span) }
+                } else {
+                    // Outlined in its own file.
+                    throw new Error('outlined modules are unimplemented');
+                }
             }
             case TokenType.Impl: {
                 const implKwSpan = tokens[i].span;

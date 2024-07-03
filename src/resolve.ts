@@ -1,4 +1,4 @@
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, ModItem } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -69,7 +69,7 @@ const INTRINSICS: Intrinsic[] = [
     mkIntrinsic('trunc', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U'))
 ];
 export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl };
-export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy);
+export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy) | Mod;
 export type BindingPat = { type: 'Binding', ident: string };
 export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
@@ -247,6 +247,15 @@ export function computeResolutions(ast: Program): Resolutions {
                 });
                 break;
             }
+            case 'Mod': {
+                tyRes.add(stmt.name, stmt);
+                tyRes.withScope(() => {
+                    for (const item of stmt.items) {
+                        resolveStmt(item);
+                    }
+                });
+                break;
+            }
             default: assertUnreachable(stmt);
         }
     }
@@ -322,6 +331,25 @@ export function computeResolutions(ast: Program): Resolutions {
                                         throw new Error(`variant '${segment.value.ident}' not found on enum ${currentTy.name}`);
                                     }
                                     exprMap.set(expr, resolveEnumPath(expr.path));
+                                    break;
+                                }
+                                case 'Mod': {
+                                    const stmt: ModItem | undefined = currentTy.items.find((item: ModItem) => {
+                                        switch (item.type) {
+                                            case 'FnDecl':
+                                                return item.sig.name === segment.value.ident;
+                                            default:
+                                                return item.name === segment.value.ident;
+                                        }
+                                    });
+                                    if (!stmt) {
+                                        throw new Error(`'${segment.value.ident}' does not exist in module ${currentTy.name}`);
+                                    }
+                                    if (stmt.type === 'FnDecl') {
+                                        exprMap.set(expr, stmt);
+                                    } else {
+                                        currentTy = stmt;
+                                    }
                                     break;
                                 }
                                 case undefined:

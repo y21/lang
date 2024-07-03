@@ -1,0 +1,10 @@
+mod a {
+    mod b {
+        fn c(): i32 { return 1; }
+    }
+    fn d(): i32 { return 2; }
+    type E = { v: i32 };
+}
+fn main(): i32 {
+    return a::d() + a::b::c();
+}

@@ -193,6 +193,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             }
                             return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
                         case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
+                        case 'Mod': throw new Error('cannot lower module as a type');
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -280,6 +281,12 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 lowerTy(stmt.selfTy);
                 for (const item of stmt.items) {
                     typeckFn(item.decl, stmt);
+                }
+                break;
+            }
+            case 'Mod': {
+                for (const item of stmt.items) {
+                    typeckStmt(item);
                 }
                 break;
             }

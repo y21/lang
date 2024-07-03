@@ -173,6 +173,7 @@ export function tokenize(src: string): Token[] {
                         case 'continue': ty = TokenType.Continue; break;
                         case 'match': ty = TokenType.Match; break;
                         case 'impl': ty = TokenType.Impl; break;
+                        case 'mod': ty = TokenType.Mod; break;
                         case 'Self': ty = TokenType.SelfTy; break;
                         default: ty = TokenType.Ident; break;
                     }

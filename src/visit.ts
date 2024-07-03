@@ -13,7 +13,21 @@ export function visitInStmt(stmt: Stmt, forExpr: (e: Expr) => void, forStmt: (s:
             }
             break;
         }
-        case 'TyAlias': break;
+        case 'TyAlias':
+        case 'ExternFnDecl': break;
+        case 'Impl': {
+            for (const item of stmt.items) {
+                visitInExpr(item.decl.body, forExpr, forStmt);
+            }
+            break;
+        }
+        case 'Mod': {
+            for (const item of stmt.items) {
+                visitInStmt(item, forExpr, forStmt);
+            }
+            break;
+        }
+        default: assertUnreachable(stmt);
     }
 }
 

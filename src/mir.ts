@@ -157,6 +157,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
             switch (stmt.type) {
                 case 'Impl': break;
                 case 'FnDecl': break; // Nested bodies are only lowered when explicitly requested
+                case 'Mod': break;
                 case 'ExternFnDecl':
                     // Extern fns don't have a body, nothing needs to be lowered
                     // TODO: we might want to at the very least validate intrinsic signatures

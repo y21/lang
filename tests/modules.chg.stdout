@@ -1,0 +1,62 @@
+expr @ 3:30 3:31 => i32
+expr @ 3:23 3:31 => never
+expr @ 3:21 4:0 => ()
+expr @ 5:26 5:27 => i32
+expr @ 5:19 5:27 => never
+expr @ 5:17 6:0 => ()
+expr @ 9:15 9:16 => fn d(...)
+expr @ 9:15 9:18 => i32
+expr @ 9:27 9:28 => fn c(...)
+expr @ 9:27 9:30 => i32
+expr @ 9:15 9:30 => i32
+expr @ 9:5 9:30 => never
+expr @ 8:16 11:1 => ()
+
+
+
+define i32 @d() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 2, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
+
+define i32 @c() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 1, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
+
+define i32 @main() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+%l.1 = call i32 @d()
+br label %bb.1
+
+bb.1:
+%l.2 = call i32 @c()
+br label %bb.2
+
+bb.2:
+%l.3 = add i32 %l.1, %l.2
+store i32 %l.3, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
+
+
