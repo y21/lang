@@ -636,14 +636,6 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         throw new Error(`selected method '${expr.path.ident}' does not have a receiver parameter`);
                     }
 
-                    // const sig = (() => {
-                    //     // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
-                    //     const sig: InstantiatedFnSig = {
-                    //         parameters: [],
-                    //         ret: UNIT,
-                    //         args: []
-                    //     };
-
                     const genericArgs: Ty[] = [...derefTargetTy.args];
 
                     if (expr.path.args.length > 0) {
@@ -660,11 +652,6 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             genericArgs.push(tv);
                         }
                     }
-                    // const sig: InstantiatedFnSig = {
-                    //     args: genericArgs,
-                    //     parameters: [],
-                    //     ret: 
-                    // };
 
                     const parameters: Ty[] = [];
                     let ret: Ty;
@@ -1003,6 +990,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         let ty = infcx.exprTys.get(expr)!;
         switch (expr.type) {
             case 'FnCall':
+            case 'MethodCall':
                 const uninstantiatedSig = instantiatedFnSigs.get(expr)!;
                 instantiatedFnSigs.set(expr, {
                     args: uninstantiatedSig.args.map(instantiateTyVars),

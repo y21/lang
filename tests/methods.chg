@@ -2,6 +2,7 @@ type V<T> = { value: T };
 
 impl<T> V<T> {
   fn foo(self*): T* { return &(*self).value; }
+  fn bar<X>(self, x: X) {}
 }
 fn free<T>(s: V<T>*) {}
 
@@ -10,5 +11,6 @@ fn main(): i32 {
   free(&v);
   V::<i32>::foo(&v);
   V::foo(&v);
+  v.bar(42);
   return *(&v).foo();
 }

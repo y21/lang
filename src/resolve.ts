@@ -240,7 +240,7 @@ export function computeResolutions(ast: Program): Resolutions {
                     resolveTy(stmt.selfTy);
                     for (const item of stmt.items) {
                         switch (item.type) {
-                            case 'Fn': resolveFnDecl(item.decl); break;
+                            case 'Fn': resolveFnDecl(item.decl, stmt); break;
                             default: assertUnreachable(item.type);
                         }
                     }
@@ -453,9 +453,10 @@ export function computeResolutions(ast: Program): Resolutions {
         }
     }
 
-    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl) {
+    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl, impl?: Impl) {
+        const parentGenerics = impl?.generics.length || 0;
         for (let i = 0; i < sig.generics.length; i++) {
-            tyRes.add(sig.generics[i], { type: 'TyParam', id: i, parentItem: item });
+            tyRes.add(sig.generics[i], { type: 'TyParam', id: i + parentGenerics, parentItem: item });
         }
 
         for (const param of sig.parameters) {
@@ -470,13 +471,13 @@ export function computeResolutions(ast: Program): Resolutions {
         }
     }
 
-    function resolveFnDecl(decl: FnDecl) {
+    function resolveFnDecl(decl: FnDecl, impl?: Impl) {
         if (INTRINSICS.some(ins => ins.sig.name === decl.sig.name)) {
             throw new Error(`function cannot have name '${decl.sig.name}' because it is the name of an intrinsic`);
         }
         valRes.add(decl.sig.name, decl);
         withAllScopes(() => {
-            resolveFnSig(decl.sig, decl);
+            resolveFnSig(decl.sig, decl, impl);
             resolveExpr(decl.body);
         });
     }
