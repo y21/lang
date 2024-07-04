@@ -174,7 +174,7 @@ export function tokenize(src: string): Token[] {
                         case 'match': ty = TokenType.Match; break;
                         case 'impl': ty = TokenType.Impl; break;
                         case 'mod': ty = TokenType.Mod; break;
-                        case 'Self': ty = TokenType.SelfTy; break;
+                        case 'trait': ty = TokenType.Trait; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });

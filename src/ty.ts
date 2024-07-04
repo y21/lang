@@ -1,4 +1,4 @@
-import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, } from "./parse";
+import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, } from "./parse";
 import { assert } from "./util";
 
 export type RecordType = { type: 'Record', fields: RecordFields<Ty> };
@@ -12,7 +12,7 @@ export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'int', value: IntTy }
     | { type: 'str' }
     | { type: 'Array', elemTy: Ty, len: number }
-    | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl }
+    | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait }
     | { type: 'FnDef', decl: FnDecl }
     | { type: 'ExternFnDef', decl: ExternFnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }

@@ -105,6 +105,12 @@ export type Mod = {
     name: string,
     items: ModItem[]
 };
+export type TraitItem = { type: 'Fn', sig: AstFnSignature };
+export type Trait = {
+    type: 'Trait',
+    name: string,
+    items: TraitItem[]
+};
 export type Stmt = { span: Span } & (
     | { type: 'Expr', value: Expr }
     | LetDecl
@@ -113,6 +119,7 @@ export type Stmt = { span: Span } & (
     | ExternFnDecl
     | Impl
     | Mod
+    | Trait
 );
 export type Mutability = 'imm' | 'mut';
 export type RecordFields<Ty> = ([string, Ty])[];
@@ -146,9 +153,16 @@ export type Pat = { span: Span } & (
 
 export type AstArm = { pat: Pat, body: Expr };
 
-export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl | Impl): Generics {
-    if (decl.type === 'TyAlias' || decl.type === 'Impl') return decl.generics;
-    else return decl.sig.generics;
+export function genericsOfDecl(decl: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait): Generics {
+    switch (decl.type) {
+        case 'TyAlias':
+        case 'Impl':
+            return decl.generics;
+        case 'ExternFnDecl':
+        case 'FnDecl':
+            return decl.sig.generics;
+        case 'Trait': return [];
+    }
 }
 
 const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
@@ -951,6 +965,21 @@ export function parse(src: string): Program {
                 impl.span = joinSpan(implKwSpan, tokens[i - 1].span);
 
                 return impl;
+            }
+            case TokenType.Trait: {
+                const traitKwSpan = tokens[i++].span;
+                const name = expectIdent();
+                const items: TraitItem[] = [];
+                eatToken(TokenType.LBrace);
+                while (!eatToken(TokenType.RBrace, false)) {
+                    eatToken(TokenType.Fn);
+                    const sig = parseFnSignature();
+                    eatToken(TokenType.Semi);
+                    items.push({ type: 'Fn', sig });
+                }
+                return {
+                    type: 'Trait', items, name, span: joinSpan(traitKwSpan, tokens[i - 1].span)
+                };
             }
             default: {
                 const value = parseRootExpr();

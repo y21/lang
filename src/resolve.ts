@@ -1,4 +1,4 @@
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, ModItem } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, ModItem, Trait } from "./parse";
 import { assertUnreachable } from "./util";
 
 type Scope<T> = Map<string, T>;
@@ -68,8 +68,8 @@ const INTRINSICS: Intrinsic[] = [
     mkIntrinsic('ext', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
     mkIntrinsic('trunc', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U'))
 ];
-export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl };
-export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy) | Mod;
+export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait };
+export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy) | Mod | Trait;
 export type BindingPat = { type: 'Binding', ident: string };
 export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
@@ -243,6 +243,16 @@ export function computeResolutions(ast: Program): Resolutions {
                             case 'Fn': resolveFnDecl(item.decl, stmt); break;
                             default: assertUnreachable(item.type);
                         }
+                    }
+                });
+                break;
+            }
+            case 'Trait': {
+                tyRes.add(stmt.name, stmt);
+                tyRes.withScope(() => {
+                    tyRes.add('Self', { type: 'TyParam', id: 0, parentItem: stmt });
+                    for (const item of stmt.items) {
+                        resolveFnSig(item.sig, stmt);
                     }
                 });
                 break;
@@ -453,10 +463,9 @@ export function computeResolutions(ast: Program): Resolutions {
         }
     }
 
-    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl, impl?: Impl) {
-        const parentGenerics = impl?.generics.length || 0;
+    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl | Trait, parentGenerics?: Generics) {
         for (let i = 0; i < sig.generics.length; i++) {
-            tyRes.add(sig.generics[i], { type: 'TyParam', id: i + parentGenerics, parentItem: item });
+            tyRes.add(sig.generics[i], { type: 'TyParam', id: i + (parentGenerics?.length || 0), parentItem: item });
         }
 
         for (const param of sig.parameters) {
@@ -477,7 +486,7 @@ export function computeResolutions(ast: Program): Resolutions {
         }
         valRes.add(decl.sig.name, decl);
         withAllScopes(() => {
-            resolveFnSig(decl.sig, decl, impl);
+            resolveFnSig(decl.sig, decl, impl?.generics);
             resolveExpr(decl.body);
         });
     }

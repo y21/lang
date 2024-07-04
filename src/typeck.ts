@@ -194,6 +194,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
                         case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
                         case 'Mod': throw new Error('cannot lower module as a type');
+                        case 'Trait': throw new Error(`expected type, got trait ${ty.value}`);
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -236,9 +237,9 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         return lowered;
     }
 
-    function typeckFn(decl: FnDecl, enclosingImpl?: Impl) {
-        const ret = decl.sig.ret && lowerTy(decl.sig.ret);
-        for (const parameter of decl.sig.parameters) {
+    function typeckFnSig(sig: AstFnSignature, enclosingImpl?: Impl): Ty | undefined {
+        const ret = sig.ret && lowerTy(sig.ret);
+        for (const parameter of sig.parameters) {
             if (parameter.type === 'Receiver') {
                 let recv = lowerTy(enclosingImpl!.selfTy);
                 if (parameter.ptr) {
@@ -249,6 +250,11 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 patTys.set(parameter, lowerTy(parameter.ty));
             }
         }
+        return ret;
+    }
+
+    function typeckFn(decl: FnDecl, enclosingImpl?: Impl) {
+        const ret = typeckFnSig(decl.sig, enclosingImpl);
         infcx.withFn(ret, () => { typeckExpr(decl.body); });
     }
 
@@ -276,7 +282,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 break;
             }
             case 'TyAlias': break;
-            case 'ExternFnDecl': if (stmt.sig.ret) lowerTy(stmt.sig.ret); break;
+            case 'ExternFnDecl': typeckFnSig(stmt.sig); break;
             case 'Impl': {
                 lowerTy(stmt.selfTy);
                 for (const item of stmt.items) {
@@ -287,6 +293,12 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             case 'Mod': {
                 for (const item of stmt.items) {
                     typeckStmt(item);
+                }
+                break;
+            }
+            case 'Trait': {
+                for (const item of stmt.items) {
+                    typeckFnSig(item.sig);
                 }
                 break;
             }

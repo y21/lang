@@ -27,6 +27,10 @@ export function visitInStmt(stmt: Stmt, forExpr: (e: Expr) => void, forStmt: (s:
             }
             break;
         }
+        case 'Trait': {
+            // No statements (currently) appear in here.
+            break;
+        }
         default: assertUnreachable(stmt);
     }
 }
