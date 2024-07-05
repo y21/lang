@@ -74,7 +74,12 @@ export type BindingPat = { type: 'Binding', ident: string };
 export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
 export type TypeResolutions = Map<AstTy, TypeResolution>;
-export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution | BindingPat;
+/**
+ * Partially resolved trait fn. This corresponds to "Default::default" paths with no self type specified.
+ * These are incomplete because it relies on inference to fill that self type in.
+ */
+export type TraitFn = { parentTrait: Trait, sig: AstFnSignature };
+export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution | BindingPat | { type: 'TraitFn', value: TraitFn };
 export type ValueResolutions = Map<Expr, ValueResolution>;
 export type PatResolutions = Map<Pat, PatResolution>;
 export type Resolutions = {
@@ -221,12 +226,12 @@ export function computeResolutions(ast: Program): Resolutions {
             case 'Impl': {
                 tyRes.withScope(() => {
                     if (stmt.selfTy.type !== 'Path') {
-                        throw new Error('impl self type must be a path');
+                        throw new Error('self type of impl must be a path');
                     }
-                    const resolved = tyRes.find(stmt.selfTy.value.segments[0].ident);
-                    if (!resolved || resolved.type !== 'TyAlias') {
-                        throw new Error('impl self type must resolve to a type alias');
-                    }
+                    resolveTy(stmt.selfTy);
+                    const resolved = tyMap.get(stmt.selfTy)!;
+                    tyRes.add('Self', resolved);
+
                     const curImpls = impls.get(resolved);
                     if (curImpls) {
                         curImpls.push(stmt);
@@ -333,6 +338,16 @@ export function computeResolutions(ast: Program): Resolutions {
                                     }
 
                                     exprMap.set(expr, selectedItem.decl);
+                                    break;
+                                }
+                                case 'Trait': {
+                                    const selectedItem = currentTy.items.find(item => item.sig.name === segment.value.ident);
+
+                                    if (!selectedItem || selectedItem.type !== 'Fn') {
+                                        throw new Error('unimplemented segment');
+                                    }
+
+                                    exprMap.set(expr, { type: 'TraitFn', value: { parentTrait: currentTy, sig: selectedItem.sig } });
                                     break;
                                 }
                                 case 'Enum': {

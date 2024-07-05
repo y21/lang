@@ -64,6 +64,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
             case 'Array':
                 return `[${ty.len} x ${llTy(ty.elemTy)}]`;
+            case 'TraitFn':
             case 'FnDef':
                 todo(ty.type);
             case 'Alias':
@@ -96,6 +97,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'bool': return 'i1';
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef':
+            case 'TraitFn':
             case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
             case 'Tuple': return '{' + val.value.map(v => llValTy(mir, v)).join(', ') + '}';
@@ -144,6 +146,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                     // At least for now, the variant index has 1:1 mapping to the in-memory representation
                     case 'Variant': return val.variant.toString();
                     case 'FnDef':
+                    case 'TraitFn':
                     case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
                     case 'Record':
                     case 'Tuple': {

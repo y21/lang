@@ -3,7 +3,6 @@ import { Span, joinSpan, ppSpan } from "./span";
 import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
-import { todo, inspect } from "./util";
 
 export type BinaryOp =
     | TokenType.Plus
@@ -94,6 +93,7 @@ export type ImplItem = {
 export type Impl = {
     type: 'Impl',
     selfTy: AstTy,
+    ofTrait: Path<AstTy> | null,
     generics: Generics,
     items: ImplItem[]
 };
@@ -947,11 +947,22 @@ export function parse(src: string): Program {
                 const implKwSpan = tokens[i].span;
                 i++;
                 const generics = parseGenericsList();
-                const selfTy = parseTy();
+                let selfTy: AstTy = parseTy();
+                let ofTrait: Path<AstTy> | null = null;
+                if (eatToken(TokenType.For, false)) {
+                    // impl Trait **for** Type
+                    // We incorrectly parsed the trait reference as a type, but that's okay, paths are also types, so unwrap the path here
+                    // and reparse the next thing as a type.
+                    if (selfTy.type !== 'Path') {
+                        throw new Error('trait reference in impl must be a path');
+                    }
+                    ofTrait = selfTy.value;
+                    selfTy = parseTy();
+                }
                 eatToken(TokenType.LBrace);
 
                 const items: ImplItem[] = [];
-                let impl: { span: Span } & Impl = { type: 'Impl', items, selfTy, generics, span: implKwSpan };
+                let impl: { span: Span } & Impl = { type: 'Impl', items, selfTy, generics, ofTrait, span: implKwSpan };
                 while (!eatToken(TokenType.RBrace, false)) {
                     // Parse associated items.
                     const item = parseStmtOrTailExpr();

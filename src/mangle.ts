@@ -1,6 +1,6 @@
 import { FnDecl } from "./parse";
 import { Ty } from "./ty";
-import { todo, assertUnreachable, assert } from "./util";
+import { assertUnreachable, assert } from "./util";
 
 export function mangleTy(ty: Ty): string {
     switch (ty.type) {
@@ -16,6 +16,7 @@ export function mangleTy(ty: Ty): string {
         case 'TyVid':
         case 'FnDef':
         case 'ExternFnDef':
+        case 'TraitFn':
             throw new Error(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
@@ -55,7 +56,10 @@ export function mangleTy(ty: Ty): string {
 export function mangleInstFn(decl: FnDecl, args: Ty[]): string {
     let mangled = decl.sig.name;
 
-    assert((decl.parent?.generics.length ?? 0) + decl.sig.generics.length === args.length, `mismatched generic args when mangling ${decl.sig.name}`);
+    assert(
+        (decl.parent?.generics.length ?? 0) +
+        decl.sig.generics.length +
+        (decl.parent?.ofTrait ? 1 : 0) === args.length, `mismatched generic args when mangling ${decl.sig.name}`);
     if (args.length > 0) {
         mangled += '$LT$';
 

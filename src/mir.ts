@@ -1,5 +1,5 @@
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl } from "./parse";
-import { BindingPat, Resolutions } from "./resolve";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl, AstFnSignature } from "./parse";
+import { BindingPat, Resolutions, TraitFn } from "./resolve";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8 } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
@@ -11,6 +11,7 @@ export type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
+    | { type: 'TraitFn', value: TraitFn }
     | { type: 'ExternFnDef', value: ExternFnDecl }
     | { type: 'Record', value: RecordFields<MirValue> }
     | { type: 'Tuple', value: MirValue[] }
@@ -222,6 +223,12 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                 value: resolution
                             };
                         };
+                        case 'TraitFn': {
+                            return {
+                                type: 'TraitFn',
+                                value: resolution.value
+                            }
+                        }
                         case 'FnParam':
                         case 'LetDecl':
                         case 'Binding': {
@@ -415,8 +422,25 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     }
 
                     const callee = lowerExpr(expr.callee);
-                    if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef') {
-                        throw new Error('callee must be a FnDef or ExternFnDef');
+                    let decl: FnDecl | ExternFnDecl | null = null;
+
+                    if (callee.type === 'FnDef' || callee.type === 'ExternFnDef') {
+                        decl = callee.value;
+                    } else if (callee.type === 'TraitFn') {
+                        const selfTy = sig.args[0];
+                        if (selfTy.type !== 'Alias') {
+                            throw new Error('self type of called trait method must be an alias, got ' + selfTy.type);
+                        }
+                        const impls = resolutions.impls.get(selfTy.decl)!;
+                        for (const impl of impls) {
+                            const item = impl.items.find(item => item.decl.sig.name === callee.value.sig.name);
+                            if (item) {
+                                decl = item.decl;
+                                break;
+                            }
+                        }
+                    } else {
+                        throw new Error(`unknown callee type: ${callee.type}`);
                     }
                     const res = addLocal(sig.ret, true);
 
@@ -425,7 +449,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
 
-                    block.terminator = { type: 'Call', args: callArgs, assignee: res, decl: callee.value, sig, target: targetBlock };
+                    block.terminator = { type: 'Call', args: callArgs, assignee: res, decl: decl!, sig, target: targetBlock };
                     block = blocks[targetBlock];
 
                     return { type: 'Local', value: res };

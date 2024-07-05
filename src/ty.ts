@@ -1,4 +1,5 @@
-import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, } from "./parse";
+import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, AstFnSignature, } from "./parse";
+import { TraitFn } from "./resolve";
 import { assert } from "./util";
 
 export type RecordType = { type: 'Record', fields: RecordFields<Ty> };
@@ -14,6 +15,7 @@ export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait }
     | { type: 'FnDef', decl: FnDecl }
+    | { type: 'TraitFn', value: TraitFn }
     | { type: 'ExternFnDef', decl: ExternFnDecl }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
@@ -77,6 +79,8 @@ export function ppTy(ty: Ty): string {
         case 'TyVid': return `?${ty.id}t`;
         case 'FnDef':
             return `fn ${ty.decl.sig.name}(...)`;
+        case 'TraitFn':
+            return `fn ${ty.value.sig.name}(...)`;
         case 'ExternFnDef':
             return `extern "${ty.decl.abi}" fn ${ty.decl.sig.name}(...)`;
         case 'Record': {
@@ -133,6 +137,7 @@ export function instantiateTy(ty: Ty, args: Ty[]): Ty {
         }
         case 'FnDef':
         case 'ExternFnDef':
+        case 'TraitFn':
             throw new Error('attempted to instantiate FnDef');
         case 'Pointer': {
             const pointee = instantiateTy(ty.pointee, args);

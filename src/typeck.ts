@@ -356,6 +356,8 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         // TODO: is EMPTY_FLAGS correct here..?
                         case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
                         case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
+                        case 'TraitFn':
+                            return { type: 'TraitFn', value: litres.value, flags: EMPTY_FLAGS };
                         case 'LetDecl':
                         case 'Binding': return patTys.get(litres)!;
                         case 'FnParam': return patTys.get(litres.param)!;
@@ -468,19 +470,24 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                     return { type: 'Record', flags, fields };
                 }
                 case 'FnCall': {
-                    const sig = (() => {
-                        const callee = typeckExpr(expr.callee);
-                        if (callee.type !== 'FnDef' && callee.type !== 'ExternFnDef' || expr.callee.type !== 'Path') {
-                            // TODO: move the substitution stuff to typechecking paths specifically
-                            throw new Error('callee must be a path to a FnDef');
-                        }
+                    const callee = typeckExpr(expr.callee);
+                    if (expr.callee.type !== 'Path') {
+                        // TODO: move the substitution stuff to typechecking paths specifically
+                        throw new Error('callee must be a path to a FnDef');
+                    }
 
-                        // HACK: create the signature with dummy data so that we have an object reference to stick into the ty var
-                        const sig: InstantiatedFnSig = {
-                            parameters: [],
-                            ret: UNIT,
-                            args: []
-                        };
+                    const sig: InstantiatedFnSig = {
+                        parameters: [],
+                        ret: UNIT,
+                        args: []
+                    };
+
+                    let astSig: AstFnSignature;
+                    let selfTy: Ty | null;
+                    if (callee.type === 'FnDef' || callee.type === 'ExternFnDef') {
+                        astSig = callee.decl.sig;
+                        const parent = (callee.decl as FnDecl).parent;
+                        selfTy = parent ? lowerTy(parent.selfTy) : null;
 
                         let segmentsAndGenerics: [PathSegment<AstTy>, Generics][];
                         if (callee.type === 'FnDef' && callee.decl.parent !== null) {
@@ -514,26 +521,43 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                                 }
                             }
                         }
+                    } else if (callee.type === 'TraitFn') {
+                        astSig = callee.value.sig;
+                        selfTy = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
+                        // Implicit `Self` type in `<??? as Default>::default`
+                        sig.args.push(selfTy);
 
-                        // with `genericArgs` created we can fix up the signature
-                        for (const param of callee.decl.sig.parameters) {
-                            let ty: Ty;
-                            if (param.type === 'Receiver') {
-                                ty = lowerTy((callee.decl as FnDecl).parent!.selfTy);
-                                if (param.ptr) {
-                                    ty = { type: 'Pointer', flags: ty.flags, mtb: param.ptr, pointee: ty };
-                                }
+                        // Traits currently don't have generic parameters, so we only need to consider the last associated fn segment's generics
+                        const segments = expr.callee.path.segments;
+                        for (const arg of segments[segments.length - 1].args) {
+                            if (arg.ty.type === 'Infer') {
+                                sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
                             } else {
-                                ty = lowerTy(param.ty);
+                                sig.args.push(lowerTy(arg.ty));
                             }
-                            sig.parameters.push(instantiateTy(ty, sig.args));
                         }
-                        if (callee.decl.sig.ret) {
-                            sig.ret = instantiateTy(lowerTy(callee.decl.sig.ret), sig.args);
-                        }
+                    } else {
+                        throw new Error(`invalid callee: ${callee.type}`);
+                    }
 
-                        return sig;
-                    })();
+
+                    // with `genericArgs` created we can fix up the signature
+                    for (const param of astSig.parameters) {
+                        let ty: Ty;
+                        if (param.type === 'Receiver') {
+                            ty = selfTy!;
+                            if (param.ptr) {
+                                ty = { type: 'Pointer', flags: ty.flags, mtb: param.ptr, pointee: ty };
+                            }
+                        } else {
+                            ty = lowerTy(param.ty);
+                        }
+                        sig.parameters.push(instantiateTy(ty, sig.args));
+                    }
+                    if (astSig.ret) {
+                        sig.ret = instantiateTy(lowerTy(astSig.ret), sig.args);
+                    }
+
                     instantiatedFnSigs.set(expr, sig);
 
                     const expectedCount = sig.parameters.length;
@@ -969,6 +993,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 return instantiateTyVars(infcx.tyVars[ty.id].constrainedTy!);
             case 'FnDef':
             case 'ExternFnDef':
+            case 'TraitFn':
                 throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
             case 'int':
             case 'str':
