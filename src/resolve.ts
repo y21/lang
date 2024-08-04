@@ -1,3 +1,4 @@
+import { addEarlyImpl, EarlyImpls, itemInEarlyImpls } from "./impls";
 import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, ModItem, Trait } from "./parse";
 import { assertUnreachable } from "./util";
 
@@ -68,8 +69,18 @@ const INTRINSICS: Intrinsic[] = [
     mkIntrinsic('ext', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
     mkIntrinsic('trunc', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U'))
 ];
-export type TyParamResolution = { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait };
-export type TypeResolution = TyParamResolution | { type: 'Primitive', kind: PrimitiveTy } | TyAliasDecl | ({ type: 'Enum' } & AstTy) | Mod | Trait;
+export type TyParamResolution = {
+    type: 'TyParam',
+    id: number,
+    parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait,
+};
+export type TypeResolution = TyParamResolution
+    | { type: 'Primitive', kind: PrimitiveTy }
+    | TyAliasDecl
+    | { type: 'Self', selfTy: AstTy }
+    | ({ type: 'Enum' } & AstTy)
+    | Mod
+    | Trait;
 export type BindingPat = { type: 'Binding', ident: string };
 export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
@@ -87,7 +98,7 @@ export type Resolutions = {
     valueResolutions: ValueResolutions,
     patResolutions: PatResolutions,
     breakableResolutions: Map<Expr, Breakable>,
-    impls: Map<TypeResolution, Impl[]>,
+    impls: EarlyImpls,
     entrypoint: FnDecl
 };
 
@@ -122,7 +133,7 @@ export function computeResolutions(ast: Program): Resolutions {
     const exprMap: Map<Expr, ValueResolution> = new Map();
     const patMap: Map<Pat, PatResolution> = new Map();
     const breakableMap: Map<Expr, Breakable> = new Map();
-    const impls: Map<TypeResolution, Impl[]> = new Map();
+    const impls: EarlyImpls = [];
 
     const withAllScopes = (f: () => void) => {
         tyRes.withScope(() => {
@@ -138,29 +149,33 @@ export function computeResolutions(ast: Program): Resolutions {
         map.set(mapkey, res);
     };
 
+    function resolveTyPath(path: Path<AstTy>, ty: AstTy) {
+        if (path.segments.length !== 1) {
+            throw new Error('path must have one segment');
+        }
+        for (const arg of path.segments[0].args) resolveTy(arg.ty);
+
+        const segment = path.segments[0];
+        switch (segment.ident) {
+            case 'never': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Never }); break;
+            case 'i8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I8 }); break;
+            case 'i16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I16 }); break;
+            case 'i32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I32 }); break;
+            case 'i64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I64 }); break;
+            case 'u8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U8 }); break;
+            case 'u16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U16 }); break;
+            case 'u32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U32 }); break;
+            case 'u64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U64 }); break;
+            case 'bool': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Bool }); break;
+            case 'str': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Str }); break;
+            default: registerRes(segment.ident, ty, tyRes, tyMap); break;
+        }
+    }
+
     function resolveTy(ty: AstTy) {
         switch (ty.type) {
             case 'Path': {
-                if (ty.value.segments.length !== 1) {
-                    throw new Error('path must have one segment');
-                }
-                for (const arg of ty.value.segments[0].args) resolveTy(arg.ty);
-
-                const segment = ty.value.segments[0];
-                switch (segment.ident) {
-                    case 'never': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Never }); break;
-                    case 'i8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I8 }); break;
-                    case 'i16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I16 }); break;
-                    case 'i32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I32 }); break;
-                    case 'i64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.I64 }); break;
-                    case 'u8': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U8 }); break;
-                    case 'u16': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U16 }); break;
-                    case 'u32': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U32 }); break;
-                    case 'u64': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.U64 }); break;
-                    case 'bool': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Bool }); break;
-                    case 'str': tyMap.set(ty, { type: "Primitive", kind: PrimitiveTy.Str }); break;
-                    default: registerRes(segment.ident, ty, tyRes, tyMap); break;
-                }
+                resolveTyPath(ty.value, ty);
                 break;
             }
             case 'Array': resolveTy(ty.elemTy); break;
@@ -225,24 +240,18 @@ export function computeResolutions(ast: Program): Resolutions {
             }
             case 'Impl': {
                 tyRes.withScope(() => {
-                    if (stmt.selfTy.type !== 'Path') {
-                        throw new Error('self type of impl must be a path');
-                    }
-                    resolveTy(stmt.selfTy);
-                    const resolved = tyMap.get(stmt.selfTy)!;
-                    tyRes.add('Self', resolved);
-
-                    const curImpls = impls.get(resolved);
-                    if (curImpls) {
-                        curImpls.push(stmt);
-                    } else {
-                        impls.set(resolved, [stmt]);
-                    }
-
                     for (let i = 0; i < stmt.generics.length; i++) {
                         tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
                     }
+
+                    if (stmt.ofTrait) {
+                        resolveTy(stmt.ofTrait);
+                    }
+
                     resolveTy(stmt.selfTy);
+                    tyRes.add('Self', { type: 'Self', selfTy: stmt.selfTy });
+                    addEarlyImpl(impls, stmt.selfTy, stmt);
+
                     for (const item of stmt.items) {
                         switch (item.type) {
                             case 'Fn': resolveFnDecl(item.decl, stmt); break;
@@ -329,9 +338,7 @@ export function computeResolutions(ast: Program): Resolutions {
 
                             switch (currentTy?.type) {
                                 case 'TyAlias': {
-                                    const selectedItem = impls.get(currentTy)
-                                        ?.map(v => v.items.find(item => item.decl.sig.name === segment.value.ident))
-                                        ?.[0];
+                                    const selectedItem = itemInEarlyImpls(impls, tyMap, currentTy, segment.value.ident);
 
                                     if (!selectedItem || selectedItem.type !== 'Fn') {
                                         throw new Error('unimplemented segment');

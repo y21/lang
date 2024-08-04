@@ -1,5 +1,5 @@
 import { FnDecl } from "./parse";
-import { Ty } from "./ty";
+import { instantiateTy, Ty } from "./ty";
 import { assertUnreachable, assert } from "./util";
 
 export function mangleTy(ty: Ty): string {
@@ -21,7 +21,7 @@ export function mangleTy(ty: Ty): string {
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
         case 'Alias': {
-            let out = mangleTy(ty.alias);
+            let out = mangleTy(instantiateTy(ty.alias, ty.args));
             if (ty.args.length > 0) {
                 out += '$LT$';
                 for (let i = 0; i < ty.args.length; i++) {

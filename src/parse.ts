@@ -93,7 +93,8 @@ export type ImplItem = {
 export type Impl = {
     type: 'Impl',
     selfTy: AstTy,
-    ofTrait: Path<AstTy> | null,
+    // stores an `AstTy` only so we can store it as a key in the resolver's tyMap
+    ofTrait: ({ type: 'Path' } & AstTy) | null,
     generics: Generics,
     items: ImplItem[]
 };
@@ -948,7 +949,7 @@ export function parse(src: string): Program {
                 i++;
                 const generics = parseGenericsList();
                 let selfTy: AstTy = parseTy();
-                let ofTrait: Path<AstTy> | null = null;
+                let ofTrait: { type: 'Path' } & AstTy | null = null;
                 if (eatToken(TokenType.For, false)) {
                     // impl Trait **for** Type
                     // We incorrectly parsed the trait reference as a type, but that's okay, paths are also types, so unwrap the path here
@@ -956,7 +957,7 @@ export function parse(src: string): Program {
                     if (selfTy.type !== 'Path') {
                         throw new Error('trait reference in impl must be a path');
                     }
-                    ofTrait = selfTy.value;
+                    ofTrait = selfTy;
                     selfTy = parseTy();
                 }
                 eatToken(TokenType.LBrace);

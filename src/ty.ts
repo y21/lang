@@ -1,4 +1,4 @@
-import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, AstFnSignature, } from "./parse";
+import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, AstFnSignature, AstTy, } from "./parse";
 import { TraitFn } from "./resolve";
 import { assert } from "./util";
 
@@ -168,6 +168,41 @@ export function instantiateTy(ty: Ty, args: Ty[]): Ty {
             return { type: 'Tuple', flags, elements };
         }
         case 'Enum': return ty;
+    }
+}
+
+export function genericArgsOfTy(ty: Ty): Ty[] {
+    switch (ty.type) {
+        case 'Alias': return ty.args;
+        default: return [];
+    };
+}
+
+export const enum TyParamCheck {
+    // Always succeed when comparing the LHS type with a type parameter.
+    // This is used when finding an impl for a method call.
+    IgnoreAgainst
+}
+
+export function eqManyTys(lty: Ty[], rty: Ty[], tyc: TyParamCheck) {
+    return lty.length === rty.length && lty.every((lty, idx) => eqTy(lty, rty[idx], tyc));
+}
+
+export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
+    if (tyc === TyParamCheck.IgnoreAgainst && rty.type === 'TyParam') return true;
+
+    if (lty.type === 'Alias' && rty.type === 'Alias') {
+        return lty.decl === rty.decl && eqManyTys(lty.args, rty.args, tyc);
+    } else if (lty.type === 'Enum' && rty.type === 'Enum') {
+        return lty.decl === rty.decl;
+    } else if (lty.type === 'TyParam' && rty.type === 'TyParam') {
+        return lty.id === rty.id;
+    } else if (lty.type === 'Tuple' && rty.type === 'Tuple') {
+        return eqManyTys(lty.elements, rty.elements, tyc);
+    } else if (lty.type === 'int' && rty.type === 'int') {
+        return lty.value.bits === rty.value.bits && lty.value.signed === rty.value.signed;
+    } else {
+        return false;
     }
 }
 

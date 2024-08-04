@@ -1,9 +1,10 @@
 import { options } from "./cli";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics } from "./parse";
+import { fnInLateImpl, LateImpls } from "./impls";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER } from "./ty";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, eqTy, TyParamCheck, genericArgsOfTy } from "./ty";
 import { assert, assertUnreachable, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 
@@ -24,7 +25,8 @@ export type TypeckResults = {
     exprTys: Map<Expr, Ty>,
     patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
     selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem>,
-    hadErrors: boolean
+    hadErrors: boolean,
+    impls: LateImpls
 };
 
 export type InstantiatedFnSig = {
@@ -159,6 +161,8 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
     const patTys: Map<LetDecl | FnParameter | BindingPat, Ty> = new Map();
     const selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem> = new Map();
 
+    const lateImpls: LateImpls = res.impls.map(([ty, impl]) => [lowerTy(ty), impl]);
+
     function lowerTy(ty: AstTy): Ty {
         let lowered = loweredTys.get(ty);
         if (lowered) return lowered;
@@ -195,6 +199,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
                         case 'Mod': throw new Error('cannot lower module as a type');
                         case 'Trait': throw new Error(`expected type, got trait ${ty.value}`);
+                        case 'Self': return lowerTy(tyres.selfTy);
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -237,11 +242,19 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         return lowered;
     }
 
-    function typeckFnSig(sig: AstFnSignature, enclosingImpl?: Impl): Ty | undefined {
+    function typeckFnSig(sig: AstFnSignature, enclosingImplOrTrait?: Impl | Trait): Ty | undefined {
         const ret = sig.ret && lowerTy(sig.ret);
         for (const parameter of sig.parameters) {
             if (parameter.type === 'Receiver') {
-                let recv = lowerTy(enclosingImpl!.selfTy);
+                if (!enclosingImplOrTrait) throw new Error('receiver outside of an impl or trait');
+
+                let recv: Ty;
+                if (enclosingImplOrTrait.type === 'Impl') {
+                    recv = lowerTy(enclosingImplOrTrait.selfTy);
+                } else {
+                    recv = { type: 'TyParam', flags: TYPARAM_MASK, id: 0, parentItem: enclosingImplOrTrait };
+                }
+
                 if (parameter.ptr) {
                     recv = { type: 'Pointer', flags: recv.flags, mtb: parameter.ptr, pointee: recv };
                 }
@@ -298,7 +311,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
             }
             case 'Trait': {
                 for (const item of stmt.items) {
-                    typeckFnSig(item.sig);
+                    typeckFnSig(item.sig, stmt);
                 }
                 break;
             }
@@ -651,18 +664,8 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 case 'MethodCall': {
                     const targetTy = typeckExpr(expr.target);
                     const derefTargetTy = targetTy.type === 'Pointer' ? targetTy.pointee : targetTy;
-                    if (derefTargetTy.type !== 'Alias') {
-                        throw new Error(`method selection works only on aliases for now (got ${ppTy(targetTy)})`);
-                    }
 
-                    let selectedMethod: { type: 'Fn' } & ImplItem | null = null;
-                    for (const impl of res.impls.get(derefTargetTy.decl)!) {
-                        for (const item of impl.items) {
-                            if (item.type === 'Fn' && item.decl.sig.name === expr.path.ident) {
-                                selectedMethod = item;
-                            }
-                        }
-                    }
+                    let selectedMethod = fnInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
 
                     if (!selectedMethod) {
                         throw new Error(`method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`);
@@ -672,7 +675,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         throw new Error(`selected method '${expr.path.ident}' does not have a receiver parameter`);
                     }
 
-                    const genericArgs: Ty[] = [...derefTargetTy.args];
+                    const genericArgs: Ty[] = [...genericArgsOfTy(derefTargetTy)];
 
                     if (expr.path.args.length > 0) {
                         for (const arg of expr.path.args) {
@@ -1059,5 +1062,5 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
         for (const stmt of ast.stmts) visitInStmt(stmt, writebackExpr, writebackStmt);
     }
 
-    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, selectedMethods, hadErrors: lub.hadErrors };
+    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, selectedMethods: selectedMethods, hadErrors: lub.hadErrors, impls: lateImpls };
 }

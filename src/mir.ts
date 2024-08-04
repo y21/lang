@@ -1,7 +1,7 @@
 import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl, AstFnSignature } from "./parse";
-import { BindingPat, Resolutions, TraitFn } from "./resolve";
+import { BindingPat, Resolutions, TraitFn, TypeResolution } from "./resolve";
 import { TokenType } from "./token";
-import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8 } from "./ty";
+import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8, eqTy, TyParamCheck } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert, todo } from "./util";
 
@@ -428,16 +428,16 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         decl = callee.value;
                     } else if (callee.type === 'TraitFn') {
                         const selfTy = sig.args[0];
-                        if (selfTy.type !== 'Alias') {
-                            throw new Error('self type of called trait method must be an alias, got ' + selfTy.type);
-                        }
-                        const impls = resolutions.impls.get(selfTy.decl)!;
-                        for (const impl of impls) {
-                            const item = impl.items.find(item => item.decl.sig.name === callee.value.sig.name);
-                            if (item) {
-                                decl = item.decl;
-                                break;
+                        for (const [implTy, impl] of typeck.impls) {
+                            if (eqTy(selfTy, implTy, TyParamCheck.IgnoreAgainst) && impl.ofTrait) {
+                                const resolvedTrait = resolutions.tyResolutions.get(impl.ofTrait) as ({ type: 'Trait' } & TypeResolution);
+                                if (resolvedTrait === callee.value.parentTrait) {
+                                    decl = impl.items.find(item => item.decl.sig.name === callee.value.sig.name)!.decl;
+                                }
                             }
+                        }
+                        if (!callee) {
+                            throw new Error('fn impl not found');
                         }
                     } else {
                         throw new Error(`unknown callee type: ${callee.type}`);
