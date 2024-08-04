@@ -1,3 +1,5 @@
+type Foo<T> = { x: T };
+
 trait Default {
     fn default(): Self;
     fn method(self);
@@ -9,8 +11,19 @@ impl Default for i32 {
     fn method(self) {}
 }
 
+trait Bar {
+    fn baz<U>(self, u: U): U;
+}
+impl<T> Bar for Foo<T> {
+    fn baz<U>(self, u: U): U {
+        return u;
+    }
+}
+
 fn main(): i32 {
     let x: i32 = 10;
     x.method();
     return Default::default();
+    let b: Foo<i32> = .{ x: 10 };
+    return b.baz(55);
 }

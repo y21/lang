@@ -241,7 +241,7 @@ export function computeResolutions(ast: Program): Resolutions {
             case 'Impl': {
                 tyRes.withScope(() => {
                     for (let i = 0; i < stmt.generics.length; i++) {
-                        tyRes.add(stmt.generics[i], { type: 'TyParam', id: i, parentItem: stmt });
+                        tyRes.add(stmt.generics[i], { type: 'TyParam', id: i + (stmt.ofTrait ? 1 : 0), parentItem: stmt });
                     }
 
                     if (stmt.ofTrait) {
@@ -266,7 +266,8 @@ export function computeResolutions(ast: Program): Resolutions {
                 tyRes.withScope(() => {
                     tyRes.add('Self', { type: 'TyParam', id: 0, parentItem: stmt });
                     for (const item of stmt.items) {
-                        resolveFnSig(item.sig, stmt);
+                        // TODO: once traits can have generics, this needs to be updated to not be hardcoded to 1 anymore
+                        resolveFnSig(item.sig, stmt, 1);
                     }
                 });
                 break;
@@ -485,9 +486,9 @@ export function computeResolutions(ast: Program): Resolutions {
         }
     }
 
-    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl | Trait, parentGenerics?: Generics) {
+    function resolveFnSig(sig: AstFnSignature, item: FnDecl | ExternFnDecl | Trait, parentGenericCount?: number) {
         for (let i = 0; i < sig.generics.length; i++) {
-            tyRes.add(sig.generics[i], { type: 'TyParam', id: i + (parentGenerics?.length || 0), parentItem: item });
+            tyRes.add(sig.generics[i], { type: 'TyParam', id: i + (parentGenericCount || 0), parentItem: item });
         }
 
         for (const param of sig.parameters) {
@@ -508,7 +509,10 @@ export function computeResolutions(ast: Program): Resolutions {
         }
         valRes.add(decl.sig.name, decl);
         withAllScopes(() => {
-            resolveFnSig(decl.sig, decl, impl?.generics);
+            const parentGenericsCount = impl ?
+                impl.generics.length + (impl.ofTrait ? 1 : 0)
+                : 0;
+            resolveFnSig(decl.sig, decl, parentGenericsCount);
             resolveExpr(decl.body);
         });
     }

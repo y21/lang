@@ -1,14 +1,23 @@
-expr @ 7:16 7:17 => i32
-expr @ 7:9 7:17 => never
-expr @ 6:24 9:0 => ()
-expr @ 9:21 10:0 => ()
-expr @ 13:18 13:20 => i32
-expr @ 14:5 14:6 => i32
-expr @ 14:5 14:15 => ()
-expr @ 15:21 15:28 => fn default(...)
-expr @ 15:21 15:30 => i32
-expr @ 15:5 15:30 => never
-expr @ 12:16 17:1 => ()
+expr @ 9:16 9:17 => i32
+expr @ 9:9 9:17 => never
+expr @ 8:24 11:0 => ()
+expr @ 11:21 12:0 => ()
+expr @ 19:16 19:17 => undefined
+expr @ 19:9 19:17 => never
+expr @ 18:30 21:0 => ()
+expr @ 24:18 24:20 => i32
+expr @ 25:5 25:6 => i32
+expr @ 25:5 25:15 => ()
+expr @ 26:21 26:28 => fn default(...)
+expr @ 26:21 26:30 => i32
+expr @ 26:5 26:30 => never
+expr @ 27:29 27:31 => i32
+expr @ 27:23 27:33 => {x: i32}
+expr @ 28:12 28:13 => Foo<i32>
+expr @ 28:18 28:20 => i32
+expr @ 28:12 28:21 => i32
+expr @ 28:5 28:21 => never
+expr @ 23:16 30:1 => ()
 
 
 
@@ -35,10 +44,28 @@ ret i32 %ret.0
 
 }
 
+define i32 @baz$LT$$LB$x$$i32$RB$$LT$i32$RT$$$i32$$i32$GT$({i32} %lt.1, i32 %lt.2) {
+prologue:
+%l.0 = alloca i32
+%l.1 = alloca {i32}
+%l.2 = alloca i32
+store {i32} %lt.1, {i32}* %l.1
+store i32 %lt.2, i32* %l.2
+br label %bb.0
+
+bb.0:
+%l.3 = load i32, i32* %l.2
+store i32 %l.3, i32* %l.0
+%ret.0 = load i32, i32* %l.0
+ret i32 %ret.0
+
+}
+
 define i32 @main() {
 prologue:
 %l.0 = alloca i32
 %l.1 = alloca i32
+%l.5 = alloca {i32}
 br label %bb.0
 
 bb.0:
@@ -55,6 +82,21 @@ bb.2:
 store i32 %l.4, i32* %l.0
 %ret.0 = load i32, i32* %l.0
 ret i32 %ret.0
+
+bb.3:
+%t.1 = alloca {i32}
+%p.2 = getelementptr {i32}, {i32}* %t.1, i32 0, i32 0
+store i32 10, i32* %p.2
+%t.3 = load {i32}, {i32}* %t.1
+store {i32} %t.3, {i32}* %l.5
+%l.6 = load {i32}, {i32}* %l.5
+%l.7 = call i32 @baz$LT$$LB$x$$i32$RB$$LT$i32$RT$$$i32$$i32$GT$({i32} %l.6, i32 55)
+br label %bb.4
+
+bb.4:
+store i32 %l.7, i32* %l.0
+%ret.4 = load i32, i32* %l.0
+ret i32 %ret.4
 
 }
 
