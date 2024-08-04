@@ -1,0 +1,16 @@
+trait Default {
+    fn default(): Self;
+    fn method(self);
+}
+impl Default for i32 {
+    fn default(): Self {
+        return 0;
+    }
+    fn method(self) {}
+}
+
+fn main(): i32 {
+    let x: i32 = 10;
+    x.method();
+    return Default::default();
+}

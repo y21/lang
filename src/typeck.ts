@@ -675,7 +675,17 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         throw new Error(`selected method '${expr.path.ident}' does not have a receiver parameter`);
                     }
 
-                    const genericArgs: Ty[] = [...genericArgsOfTy(derefTargetTy)];
+                    const genericArgs: Ty[] = [];
+                    if (selectedMethod.decl.parent!.ofTrait) {
+                        // Trait methods have an implicit `Self` generic parameter we need to add
+                        genericArgs.push(targetTy);
+                    }
+
+                    if (selectedMethod.decl.parent) {
+                        for (const _ of selectedMethod.decl.parent.generics) {
+                            genericArgs.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
+                        }
+                    }
 
                     if (expr.path.args.length > 0) {
                         for (const arg of expr.path.args) {
