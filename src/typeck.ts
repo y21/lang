@@ -625,12 +625,15 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                 case 'Unary': {
                     let expectedTy: Ty;
                     let resultTy: Ty;
+                    const rhsTy = typeckExpr(expr.rhs);
                     switch (expr.op) {
                         // TODO: we could(should?) allow !num
                         case TokenType.Not: expectedTy = BOOL; resultTy = BOOL; break;
+                        // TODO: any signed int
+                        case TokenType.Minus: expectedTy = rhsTy; resultTy = rhsTy; break;
                     }
 
-                    infcx.sub('Unary', expr.rhs.span, typeckExpr(expr.rhs), expectedTy);
+                    infcx.sub('Unary', expr.rhs.span, rhsTy, expectedTy);
                     return resultTy;
                 }
                 case 'Tuple': {

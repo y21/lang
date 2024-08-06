@@ -19,7 +19,7 @@ export type BinaryOp =
     | TokenType.AndAnd
     | TokenType.OrOr;
 
-export type UnaryOp = TokenType.Not;
+export type UnaryOp = TokenType.Not | TokenType.Minus;;
 
 export type AssignmentKind = TokenType.Assign
     | TokenType.AddAssign
@@ -171,7 +171,8 @@ const UNARY_PRECEDENCE: { [index: string]: number | undefined } = {
     [TokenType.And]: 15,
     [TokenType.Star]: 15,
     [TokenType.Not]: 15,
-    [TokenType.DotDot]: 7
+    [TokenType.Minus]: 15,
+    [TokenType.DotDot]: 7,
 };
 
 // Patterns and expressions share the same precedence for symbols in here
@@ -232,6 +233,18 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.AndAnd]: 'ltr',
     [TokenType.OrOr]: 'ltr',
 };
+
+function isBlockLike(expr: Expr): boolean {
+    return expr.type === 'Block'
+        || expr.type === 'If'
+        || expr.type === 'Match'
+        || expr.type === 'While';
+}
+
+enum ParseContext {
+    Statement,
+    Subexpression
+}
 
 export function parse(src: string): Program {
     const tokens = tokenize(src);
@@ -505,7 +518,7 @@ export function parse(src: string): Program {
                     eatToken(TokenType.Comma, false);
                     const ident = expectIdent();
                     eatToken(TokenType.Colon);
-                    const value = parseRootExpr();
+                    const value = parseRootSubexpr();
                     fields.push([ident, value]);
                 }
                 return { span: joinSpan(span, tokens[i - 1].span), type: 'Record', fields };
@@ -516,11 +529,11 @@ export function parse(src: string): Program {
                 const elements: Expr[] = [];
                 while (!eatToken(TokenType.RSquare, false)) {
                     if (elements.length > 0) eatToken(TokenType.Comma);
-                    elements.push(parseRootExpr());
+                    elements.push(parseRootSubexpr());
 
                     if (elements.length === 1 && eatToken(TokenType.Semi, false)) {
                         // We have something like `[expr;`: this is an array repeat expression
-                        const count = parseRootExpr();
+                        const count = parseRootSubexpr();
                         if (count.type !== 'Number') {
                             throw new Error(`array repeat expression must be a number, got ${count.type}`);
                         }
@@ -535,7 +548,7 @@ export function parse(src: string): Program {
             case TokenType.Match: {
                 const startSpan = tokens[i].span;
                 i++;
-                const scrutinee = parseRootExpr();
+                const scrutinee = parseRootSubexpr();
                 eatToken(TokenType.LBrace);
 
                 // parse arms
@@ -555,7 +568,7 @@ export function parse(src: string): Program {
                     }
                     const pat = parseRootPat();
                     eatToken(TokenType.FatArrow);
-                    const body = parseRootExpr();
+                    const body = parseRootSubexpr();
                     arms.push({ pat, body });
                 }
 
@@ -588,32 +601,44 @@ export function parse(src: string): Program {
         return expr;
     }
 
-    function parseExpr(minPrecedence: number): Expr {
+    // Parses a block expression. Assumes that if we don't require lbraces, the previous token was the lbrace.
+    function parseBlockExpr(requireLbrace: boolean): Expr & { type: 'Block' } {
+        let lbraceSpan: Span;
+        if (requireLbrace) {
+            lbraceSpan = tokens[i].span;
+            eatToken(TokenType.LBrace);
+        } else {
+            lbraceSpan = tokens[i - 1].span;
+        }
+
+        const stmts = [];
+        let tailExpr: Expr | null = null;
+        while (!eatToken(TokenType.RBrace, false)) {
+            const stmt = parseStmtOrTailExpr();
+            if (stmt.type === 'TailExpr') {
+                tailExpr = stmt.value;
+                break;
+            } else {
+                stmts.push(stmt);
+            }
+        }
+        return { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts, tailExpr };
+    };
+
+    let parseRootSubexpr = () => parseExpr(-1, ParseContext.Subexpression);
+    let parseRootStmtExpr = () => parseExpr(-1, ParseContext.Statement);
+
+    function parseExpr(minPrecedence: number, ctxt: ParseContext): Expr {
         // Unary expressions.
         let expr: Expr;
         switch (tokens[i].ty) {
             case TokenType.Return: {
                 let returnKwSpan = tokens[i++].span;
-                const value = parseRootExpr();
+                const value = parseRootSubexpr();
                 expr = { type: 'Return', span: joinSpan(returnKwSpan, value.span), value };
                 break;
             }
-            case TokenType.LBrace: {
-                const lbraceSpan = tokens[i++].span;
-                const stmts = [];
-                let tailExpr: Expr | null = null;
-                while (!eatToken(TokenType.RBrace, false)) {
-                    const stmt = parseStmtOrTailExpr();
-                    if (stmt.type === 'TailExpr') {
-                        tailExpr = stmt.value;
-                        break;
-                    } else {
-                        stmts.push(stmt);
-                    }
-                }
-                expr = { type: 'Block', span: joinSpan(lbraceSpan, tokens[i - 1].span), stmts, tailExpr };
-                break;
-            }
+            case TokenType.LBrace: expr = parseBlockExpr(true); break;
             case TokenType.LParen: {
                 // Either tuple type or grouping, depending on if the expression is followed by a comma
                 const lparenSpan = tokens[i++].span;
@@ -623,14 +648,14 @@ export function parse(src: string): Program {
                     break;
                 }
 
-                const first = parseRootExpr();
+                const first = parseRootSubexpr();
                 if (eatToken(TokenType.Comma, false)) {
                     const elements = [first];
                     while (!eatToken(TokenType.RParen, false)) {
                         if (elements.length > 1) {
                             eatToken(TokenType.Comma, true);
                         }
-                        elements.push(parseRootExpr());
+                        elements.push(parseRootSubexpr());
                     }
                     expr = { type: 'Tuple', elements, span: joinSpan(lparenSpan, tokens[i - 1].span) };
                 } else {
@@ -641,11 +666,13 @@ export function parse(src: string): Program {
             }
             case TokenType.If: {
                 const ifSpan = tokens[i++].span;
-                const condition = parseRootExpr();
-                const body = parseBlockExpr();
+                const condition = parseRootSubexpr();
+                const body = parseBlockExpr(true);
                 let _else: Expr | null = null;
                 if (eatToken(TokenType.Else, false)) {
-                    _else = parseRootExpr();
+                    // This seems like a bit of a hack: we parse in a statement context
+                    // so that we don't parse `if ... else { 0 } + 1` as `else ({ 0 } + 1)`
+                    _else = parseRootStmtExpr();
                     if (_else.type !== 'Block' && _else.type !== 'If') {
                         throw new Error('else expression must be a block or another chained `if` expression');
                     }
@@ -655,15 +682,15 @@ export function parse(src: string): Program {
             }
             case TokenType.While: {
                 const whileSpan = tokens[i++].span;
-                const condition = parseRootExpr();
-                const body = parseBlockExpr();
+                const condition = parseRootSubexpr();
+                const body = parseBlockExpr(true);
                 expr = { type: 'While', body, condition, span: joinSpan(whileSpan, tokens[i - 1].span) };
                 break;
             }
             case TokenType.And: {
                 // Unary &
                 const andSpan = tokens[i++].span;
-                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.And]!);
+                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.And]!, ParseContext.Subexpression);
 
                 expr = { type: 'AddrOf', mtb: 'imm', pointee, span: joinSpan(andSpan, pointee.span) };
                 break;
@@ -671,21 +698,31 @@ export function parse(src: string): Program {
             case TokenType.Star: {
                 // Dereference
                 const starSpan = tokens[i++].span;
-                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.Star]!);
+                const pointee = parseExpr(UNARY_PRECEDENCE[TokenType.Star]!, ParseContext.Subexpression);
                 expr = { type: 'Deref', pointee, span: joinSpan(starSpan, pointee.span) };
                 break;
             }
             case TokenType.Not: {
                 // Unary !
                 const notSpan = tokens[i++].span;
-                const rhs = parseExpr(UNARY_PRECEDENCE[TokenType.Not]!);
+                const rhs = parseExpr(UNARY_PRECEDENCE[TokenType.Not]!, ParseContext.Subexpression);
                 expr = { type: 'Unary', op: TokenType.Not, rhs, span: joinSpan(notSpan, rhs.span) };
+                break;
+            }
+            case TokenType.Minus: {
+                // Unary -
+                const minusSpan = tokens[i++].span;
+                const rhs = parseExpr(UNARY_PRECEDENCE[TokenType.Minus]!, ParseContext.Subexpression);
+                expr = { type: 'Unary', op: TokenType.Minus, rhs, span: joinSpan(minusSpan, rhs.span) };
                 break;
             }
             default:
                 expr = parseBottomExpr();
         }
 
+        if (ctxt === ParseContext.Statement && isBlockLike(expr)) {
+            return expr;
+        }
 
         while (i < tokens.length) {
             const op = tokens[i];
@@ -706,7 +743,7 @@ export function parse(src: string): Program {
                 case TokenType.MulAssign:
                 case TokenType.DivAssign:
                 case TokenType.RemAssign: {
-                    const rhs = parseExpr(prec);
+                    const rhs = parseExpr(prec, ParseContext.Subexpression);
                     expr = { type: 'Assignment', op: op.ty, target: expr, value: rhs, span: joinSpan(expr.span, rhs.span) };
                     break;
                 }
@@ -714,7 +751,7 @@ export function parse(src: string): Program {
                     let args = [];
                     while (i < tokens.length && tokens[i].ty !== TokenType.RParen) {
                         eatToken(TokenType.Comma, false);
-                        args.push(parseRootExpr());
+                        args.push(parseRootSubexpr());
                     }
                     eatToken(TokenType.RParen, true);
                     expr = { type: 'FnCall', callee: expr, args, span: [expr.span[0], tokens[i - 1].span[1]] };
@@ -749,7 +786,7 @@ export function parse(src: string): Program {
                             i++;
                             const args: Expr[] = [];
                             while (!eatToken(TokenType.RParen, false)) {
-                                args.push(parseRootExpr());
+                                args.push(parseRootSubexpr());
                             }
                             if (typeof property !== 'string') {
                                 throw new Error('method call property cannot be a number');
@@ -777,12 +814,12 @@ export function parse(src: string): Program {
                 case TokenType.Percent:
                 case TokenType.AndAnd:
                 case TokenType.OrOr: {
-                    const rhs = parseExpr(prec);
+                    const rhs = parseExpr(prec, ParseContext.Subexpression);
                     expr = { type: 'Binary', op: op.ty, lhs: expr, rhs, span: joinSpan(expr.span, rhs.span) };
                     break;
                 }
                 case TokenType.LSquare: {
-                    const index = parseRootExpr();
+                    const index = parseRootSubexpr();
                     eatToken(TokenType.RSquare);
                     expr = { type: 'Index', index, span: joinSpan(expr.span, tokens[i - 1].span), target: expr };
                     break;
@@ -806,13 +843,6 @@ export function parse(src: string): Program {
         }
         return generics;
     }
-
-    let parseBlockExpr = () => {
-        const expr = parseRootExpr();
-        if (expr.type !== 'Block') throw new Error(`expected block expression, got ${expr.type}`);
-        return expr;
-    };
-    let parseRootExpr = () => parseExpr(-1);
 
     /**
      * Parses `fn foo(x: i32, y: i32): i32`, without an associated block.
@@ -853,7 +883,7 @@ export function parse(src: string): Program {
         switch (tokens[i].ty) {
             case TokenType.Extern: {
                 i++;
-                const abi = parseRootExpr();
+                const abi = parseRootSubexpr();
                 if (abi.type !== 'String' || (abi.value !== 'C' && abi.value !== 'intrinsic')) {
                     throw new Error('extern abi must be a string and "C" or "intrinsic"');
                 }
@@ -872,7 +902,7 @@ export function parse(src: string): Program {
             case TokenType.Fn: {
                 i++;
                 const sig = parseFnSignature();
-                const body = parseRootExpr();
+                const body = parseRootStmtExpr();
 
                 return {
                     type: 'FnDecl',
@@ -892,7 +922,7 @@ export function parse(src: string): Program {
                 }
                 let init: Expr | null = null;
                 if (eatToken(TokenType.Assign, false)) {
-                    init = parseRootExpr();
+                    init = parseRootSubexpr();
                 }
                 eatToken(TokenType.Semi);
                 return { span: joinSpan(letSpan, tokens[i - 1].span), ty, type: 'LetDecl', name, init };
@@ -994,8 +1024,13 @@ export function parse(src: string): Program {
                 };
             }
             default: {
-                const value = parseRootExpr();
-                if (eatToken(TokenType.Semi, false)) {
+                const value = parseRootStmtExpr();
+
+                // we allow block-like expression statements without a semicolon
+                if (isBlockLike(value) || eatToken(TokenType.Semi, false)) {
+                    // eat any extra ones
+                    while (eatToken(TokenType.Semi, false));
+
                     return { span: [value.span[0], tokens[i - 1].span[1]], type: 'Expr', value };
                 } else {
                     // Trailing expressions must be followed by the end of the block, i.e. the `}`

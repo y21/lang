@@ -393,10 +393,17 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                             break
                         case 'Unary':
                             switch (stmt.op) {
-                                case TokenType.Not:
+                                case TokenType.Not: {
                                     const rhs = compileValueToLocal(stmt.rhs);
-                                    output += `%l.${stmt.assignee} = xor i1 ${rhs}, true\n`
+                                    output += `%l.${stmt.assignee} = xor i1 ${rhs}, true\n`;
                                     break;
+                                }
+                                case TokenType.Minus: {
+                                    const opTy = llValTy(mir, stmt.rhs);
+                                    const rhs = compileValueToLocal(stmt.rhs);
+                                    output += `%l.${stmt.assignee} = sub ${opTy} 0, ${rhs}\n`;
+                                    break;
+                                }
                                 default: assertUnreachable(stmt);
                             }
                             break;
