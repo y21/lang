@@ -1,3 +1,6 @@
+extern "intrinsic" fn trunc<T, U>(v: T): U;
+extern "intrinsic" fn ext<T, U>(v: T): U;
+
 fn main() {
     trunc::<i8, u8>(0i8);
     trunc::<i8, u16>(0i8);

@@ -1,3 +1,5 @@
+extern "intrinsic" fn bitcast<T, U>(v: T): U;
+
 fn main(): i32 {
     let x: {x: i32} = bitcast(1);
     // ^ the initializer of this local is bitcast::<i32, ?0t> during type checking,

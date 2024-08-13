@@ -200,6 +200,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         case 'Mod': throw new Error('cannot lower module as a type');
                         case 'Trait': throw new Error(`expected type, got trait ${ty.value}`);
                         case 'Self': return lowerTy(tyres.selfTy);
+                        case 'Root': throw new Error('cannot lower root paths');
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -374,7 +375,7 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                         case 'LetDecl':
                         case 'Binding': return patTys.get(litres)!;
                         case 'FnParam': return patTys.get(litres.param)!;
-                        case 'Variant': return { type: 'Enum', decl: litres.enum, flags: EMPTY_FLAGS };
+                        case 'Variant': return lowerTy(litres.enum);
                         default: assertUnreachable(litres);
                     }
                 }

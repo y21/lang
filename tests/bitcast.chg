@@ -1,3 +1,5 @@
+extern "intrinsic" fn bitcast<T, U>(v: T): U;
+
 fn t1(): i32 { return bitcast(1); }
 fn t2(): i32 { return bitcast(.{ x: 2 }); }
 fn t3(): { x:i32 } { return bitcast(3); }

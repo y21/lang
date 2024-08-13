@@ -1,11 +1,11 @@
-fallback @ 2:31 2:32
-expr @ 2:23 2:30 => extern "intrinsic" fn bitcast(...)
-expr @ 2:31 2:32 => ?2t
-expr @ 2:23 2:33 => ?1t
-expr @ 6:5 6:6 => {x: i32}
-expr @ 6:5 6:8 => i32
-expr @ 9:18 9:19 => i64
-expr @ 10:12 10:13 => i32
-expr @ 10:5 10:13 => never
-expr @ 1:16 12:1 => ()
+fallback @ 4:31 4:32
+expr @ 4:23 4:30 => extern "intrinsic" fn bitcast(...)
+expr @ 4:31 4:32 => ?2t
+expr @ 4:23 4:33 => ?1t
+expr @ 8:5 8:6 => {x: i32}
+expr @ 8:5 8:8 => i32
+expr @ 11:18 11:19 => i64
+expr @ 12:12 12:13 => i32
+expr @ 12:5 12:13 => never
+expr @ 3:16 14:1 => ()
 

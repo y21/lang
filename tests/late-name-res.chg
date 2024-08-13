@@ -1,0 +1,29 @@
+
+fn late_enum(): E { return E::V; }
+type E = enum { V };
+fn early_enum(): E { return E::V; }
+
+mod sub1 {
+    mod sub2 {
+        fn f1() {
+            fn f2() {
+                f1();
+            }
+            f2();
+        }
+    }
+    fn f3() {}
+}
+
+fn main() {
+    sub1::f3();
+    sub1::sub2::f1();
+    let x = 1;
+    let x = x + 1;
+    let x = x + 2;
+    match x {
+        x => {
+            let x = x + 3;
+        }
+    }
+}

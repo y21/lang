@@ -1,26 +1,26 @@
-fallback @ 9:28 9:29
-fallback @ 18:16 18:18
-expr @ 9:20 9:27 => extern "intrinsic" fn bitcast(...)
-expr @ 9:28 9:29 => i32
-expr @ 9:20 9:30 => T*
-expr @ 9:37 9:38 => u64
-expr @ 9:48 9:49 => u64
-expr @ 9:12 9:54 => {ptr: T*,len: u64,cap: u64}
-expr @ 9:5 9:54 => never
-expr @ 8:23 11:0 => ()
-expr @ 13:12 13:13 => i32
-expr @ 13:5 13:13 => never
-expr @ 12:41 15:0 => ()
-expr @ 17:15 17:20 => fn mkVec(...)
-expr @ 17:15 17:22 => Vec<i32>
-expr @ 18:5 18:9 => fn push(...)
-expr @ 18:11 18:14 => Vec<i32>
-expr @ 18:10 18:14 => Vec<i32>*
-expr @ 18:16 18:18 => i32
-expr @ 18:5 18:19 => i32
-expr @ 19:12 19:13 => i32
-expr @ 19:5 19:13 => never
-expr @ 16:16 21:1 => ()
+fallback @ 10:28 10:29
+fallback @ 19:16 19:18
+expr @ 10:20 10:27 => extern "intrinsic" fn bitcast(...)
+expr @ 10:28 10:29 => i32
+expr @ 10:20 10:30 => T*
+expr @ 10:37 10:38 => u64
+expr @ 10:48 10:49 => u64
+expr @ 10:12 10:54 => {ptr: T*,len: u64,cap: u64}
+expr @ 10:5 10:54 => never
+expr @ 9:23 12:0 => ()
+expr @ 14:12 14:13 => i32
+expr @ 14:5 14:13 => never
+expr @ 13:41 16:0 => ()
+expr @ 18:15 18:20 => fn mkVec(...)
+expr @ 18:15 18:22 => Vec<i32>
+expr @ 19:5 19:9 => fn push(...)
+expr @ 19:11 19:14 => Vec<i32>
+expr @ 19:10 19:14 => Vec<i32>*
+expr @ 19:16 19:18 => i32
+expr @ 19:5 19:19 => i32
+expr @ 20:12 20:13 => i32
+expr @ 20:5 20:13 => never
+expr @ 17:16 22:1 => ()
 
 
 

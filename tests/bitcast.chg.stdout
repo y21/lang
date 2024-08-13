@@ -1,33 +1,33 @@
-fallback @ 1:31 1:32
-fallback @ 2:37 2:38
-fallback @ 3:37 3:38
-expr @ 1:23 1:30 => extern "intrinsic" fn bitcast(...)
-expr @ 1:31 1:32 => i32
-expr @ 1:23 1:33 => i32
-expr @ 1:16 1:33 => never
-expr @ 1:14 2:0 => ()
-expr @ 2:23 2:30 => extern "intrinsic" fn bitcast(...)
-expr @ 2:37 2:38 => i32
-expr @ 2:31 2:40 => {x: i32}
-expr @ 2:23 2:41 => i32
-expr @ 2:16 2:41 => never
-expr @ 2:14 3:0 => ()
-expr @ 3:29 3:36 => extern "intrinsic" fn bitcast(...)
-expr @ 3:37 3:38 => i32
-expr @ 3:29 3:39 => {x: i32}
-expr @ 3:22 3:39 => never
-expr @ 3:20 4:0 => ()
-expr @ 6:12 6:14 => fn t1(...)
-expr @ 6:12 6:16 => i32
-expr @ 6:19 6:21 => fn t2(...)
-expr @ 6:19 6:23 => i32
-expr @ 6:12 6:23 => i32
-expr @ 6:26 6:28 => fn t3(...)
-expr @ 6:26 6:30 => {x: i32}
-expr @ 6:26 6:32 => i32
-expr @ 6:12 6:32 => i32
-expr @ 6:5 6:32 => never
-expr @ 5:16 8:1 => ()
+fallback @ 3:31 3:32
+fallback @ 4:37 4:38
+fallback @ 5:37 5:38
+expr @ 3:23 3:30 => extern "intrinsic" fn bitcast(...)
+expr @ 3:31 3:32 => i32
+expr @ 3:23 3:33 => i32
+expr @ 3:16 3:33 => never
+expr @ 3:14 4:0 => ()
+expr @ 4:23 4:30 => extern "intrinsic" fn bitcast(...)
+expr @ 4:37 4:38 => i32
+expr @ 4:31 4:40 => {x: i32}
+expr @ 4:23 4:41 => i32
+expr @ 4:16 4:41 => never
+expr @ 4:14 5:0 => ()
+expr @ 5:29 5:36 => extern "intrinsic" fn bitcast(...)
+expr @ 5:37 5:38 => i32
+expr @ 5:29 5:39 => {x: i32}
+expr @ 5:22 5:39 => never
+expr @ 5:20 6:0 => ()
+expr @ 8:12 8:14 => fn t1(...)
+expr @ 8:12 8:16 => i32
+expr @ 8:19 8:21 => fn t2(...)
+expr @ 8:19 8:23 => i32
+expr @ 8:12 8:23 => i32
+expr @ 8:26 8:28 => fn t3(...)
+expr @ 8:26 8:30 => {x: i32}
+expr @ 8:26 8:32 => i32
+expr @ 8:12 8:32 => i32
+expr @ 8:5 8:32 => never
+expr @ 7:16 10:1 => ()
 
 
 
