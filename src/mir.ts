@@ -175,7 +175,8 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     break;
                 }
                 case 'Expr': lowerExpr(stmt.value); break;
-                case 'TyAlias': break;
+                case 'TyAlias':
+                case 'Use': break;
                 default: assertUnreachable(stmt);
             }
         }

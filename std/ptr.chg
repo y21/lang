@@ -1,3 +1,6 @@
+use root::std::intrinsics::bitcast;
+use root::std::mem::sizeof;
+
 fn is_null<T>(p: T*): bool {
   return addr(p) == 0;
 }
@@ -7,18 +10,18 @@ fn null<T>(): T* {
 }
 
 fn addr<T>(p: T*): u64 {
-  return root::std::intrinsics::bitcast::<T*, u64>(p);
+  return bitcast::<T*, u64>(p);
 }
 
 fn from_addr<T>(addr: u64): T* {
-  return root::std::intrinsics::bitcast::<u64, T*>(addr);
+  return bitcast::<u64, T*>(addr);
 }
 
 fn add<T>(p: T*, offset: u64): T* {
-  let size = root::std::mem::sizeof::<T>();
+  let size = sizeof::<T>();
   return from_addr(addr(p) + offset * size);
 }
 
 fn cast<T, U>(src: T*): U* {
-  return root::std::intrinsics::bitcast::<T*, U*>(src);
+  return bitcast::<T*, U*>(src);
 }

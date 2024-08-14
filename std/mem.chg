@@ -1,4 +1,6 @@
+use root::std::intrinsics::bitcast;
+
 fn sizeof<T>(): u64 {
-  let base = root::std::intrinsics::bitcast::<u64, (T, T)*>(0);
-  return root::std::intrinsics::bitcast(&(*base).1);
+  let base = bitcast::<u64, (T, T)*>(0);
+  return bitcast(&(*base).1);
 }

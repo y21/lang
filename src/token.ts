@@ -9,6 +9,8 @@ export enum TokenType {
     If,
     Else,
     For,
+    Use,
+    As,
     While,
     Match,
     FatArrow,

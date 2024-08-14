@@ -176,6 +176,8 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                         case 'impl': ty = TokenType.Impl; break;
                         case 'mod': ty = TokenType.Mod; break;
                         case 'trait': ty = TokenType.Trait; break;
+                        case 'use': ty = TokenType.Use; break;
+                        case 'as': ty = TokenType.As; break;
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });

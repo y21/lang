@@ -611,6 +611,25 @@ export function computeResolutions(ast: Module): Resolutions {
                     }
                 });
                 break;
+            case 'Use': {
+                withNamedScope(stmt.alias || stmt.path.segments[stmt.path.segments.length - 1].ident, () => {
+                    const resolveInNs = <T>(ns: Map<string, T>): boolean => {
+                        let res: T | undefined;
+                        if (res = tryEarlyResolveRelativePath(stmt.path, ns)) {
+                            ns.set(currentPath, res);
+                            return true;
+                        } else {
+                            return false;
+                        }
+                    };
+                    if (!resolveInNs(valueNs) && !resolveInNs(typeNs)) {
+                        throw new Error(`cannot (late) resolve use path ${stmt.path.segments.map(s => s.ident).join('::')}`);
+                        // TODO: figure out late resolution...
+                        // lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
+                    }
+                });
+                break;
+            }
             default: assertUnreachable(stmt);
         }
     }

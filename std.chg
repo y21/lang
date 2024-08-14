@@ -1,7 +1,7 @@
 mod intrinsics;
 mod libc;
-mod ptr;
 mod mem;
+mod ptr;
 mod str;
 
 fn print(s: str*) {

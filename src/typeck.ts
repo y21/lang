@@ -316,6 +316,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                 }
                 break;
             }
+            case 'Use': break;
             default: assertUnreachable(stmt);
         }
     }

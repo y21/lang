@@ -112,12 +112,16 @@ export type Trait = {
     name: string,
     items: TraitItem[]
 };
+// `use x as y` => `{path: "x", alias: "y"}`
+// `use x::y` => `{path: "x::y", alias: null}`
+type UseDecl = { type: 'Use', path: Path<never>, alias: string | null };
 export type Stmt = { span: Span } & (
     | { type: 'Expr', value: Expr }
     | LetDecl
     | FnDecl
     | TyAliasDecl
     | ExternFnDecl
+    | UseDecl
     | Impl
     | Mod
     | Trait
@@ -337,6 +341,32 @@ export function parse(sm: SourceMap, file: File): Module {
         }
     }
 
+    function parseTyPath<Ty>(reifySegment: (_: PathSegment<AstTy>) => PathSegment<Ty>): Path<Ty> {
+        const eatDoubleColon = () => {
+            if (tokens[i].ty === TokenType.Colon && tokens[i + 1].ty === TokenType.Colon) {
+                i += 2;
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        const segments: PathSegment<Ty>[] = [];
+        do {
+            const ident = expectIdent();
+            const args: GenericArg<AstTy>[] = [];
+            if (eatToken(TokenType.Lt, false)) {
+                while (!eatToken(TokenType.Gt, false)) {
+                    eatToken(TokenType.Comma, false);
+                    args.push({ type: 'Type', ty: parseTy() });
+                }
+            }
+            segments.push(reifySegment({ ident, args }));
+        } while (eatDoubleColon());
+
+        return { segments };
+    }
+
     let aliasTyName: string | null = null;
     function parseTy(): AstTy {
         // We only allow `type X = enum {}`, i.e. the enum must be the direct aliased type, so reset it here.
@@ -345,22 +375,7 @@ export function parse(sm: SourceMap, file: File): Module {
 
         let ty: AstTy;
         switch (tokens[i].ty) {
-            case TokenType.Ident:
-                const ident = snip(tokens[i++].span);
-                const args: GenericArg<AstTy>[] = [];
-                if (eatToken(TokenType.Lt, false)) {
-                    while (!eatToken(TokenType.Gt, false)) {
-                        eatToken(TokenType.Comma, false);
-                        args.push({ type: 'Type', ty: parseTy() });
-                    }
-                }
-                const segment: PathSegment<AstTy> = {
-                    args,
-                    ident
-                };
-
-                ty = { type: 'Path', value: { segments: [segment] } };
-                break;
+            case TokenType.Ident: ty = { type: 'Path', value: parseTyPath(x => x) }; break;
             case TokenType.LBrace:
                 i++;
                 const fields: RecordFields<AstTy> = [];
@@ -1031,6 +1046,24 @@ export function parse(sm: SourceMap, file: File): Module {
                 return {
                     type: 'Trait', items, name, span: joinSpan(traitKwSpan, tokens[i - 1].span)
                 };
+            }
+            case TokenType.Use: {
+                const useKwSpan = tokens[i++].span;
+                if (tokens[i].ty !== TokenType.Ident) {
+                    throw new Error('use must be followed by a path');
+                }
+                const path: Path<never> = parseTyPath((segment) => {
+                    if (segment.args.length > 0) {
+                        throw new Error('use path cannot have generics');
+                    }
+                    return { ident: segment.ident, args: [] };
+                });
+                const alias = eatToken(TokenType.As, false)
+                    ? expectIdent()
+                    : null;
+                const semiSpan = tokens[i].span;
+                eatToken(TokenType.Semi);
+                return { type: 'Use', path, alias, span: joinSpan(useKwSpan, semiSpan) };
             }
             default: {
                 const value = parseRootStmtExpr();

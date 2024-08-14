@@ -1,11 +1,14 @@
+use root::std::intrinsics::bitcast;
+use root::std::ptr::add as ptr_add;
+
 type StrRepr = { ptr: u8*, len: u64 };
 
 impl StrRepr {
   fn from(s: str*): StrRepr {
-    return root::std::intrinsics::bitcast(s);
+    return bitcast(s);
   }
   fn to_str(self): str* {
-    return root::std::intrinsics::bitcast(self);
+    return bitcast(self);
   }
 }
 
@@ -22,5 +25,5 @@ fn byte_at(s: str*, pos: u64): u8 {
   if pos >= parts.len {
     fatal("string index out of bounds");
   }
-  return *root::std::ptr::add(parts.ptr, pos);
+  return *ptr_add(parts.ptr, pos);
 }

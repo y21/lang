@@ -31,6 +31,7 @@ export function visitInStmt(stmt: Stmt, forExpr: (e: Expr) => void, forStmt: (s:
             // No statements (currently) appear in here.
             break;
         }
+        case 'Use': break;
         default: assertUnreachable(stmt);
     }
 }
