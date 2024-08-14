@@ -1,0 +1,26 @@
+type StrRepr = { ptr: u8*, len: u64 };
+
+impl StrRepr {
+  fn from(s: str*): StrRepr {
+    return root::std::intrinsics::bitcast(s);
+  }
+  fn to_str(self): str* {
+    return root::std::intrinsics::bitcast(self);
+  }
+}
+
+fn str_len(s: str*): u64 {
+  return StrRepr::from(s).len;
+}
+
+fn str_is_empty(s: str*): bool {
+  return str_len(s) != 0;
+}
+
+fn byte_at(s: str*, pos: u64): u8 {
+  let parts = StrRepr::from(s);
+  if pos >= parts.len {
+    fatal("string index out of bounds");
+  }
+  return *root::std::ptr::add(parts.ptr, pos);
+}

@@ -1,0 +1,3 @@
+extern "intrinsic" fn bitcast<T, U>(v: T): U;
+extern "intrinsic" fn ext<T, U>(v: T): U;
+extern "intrinsic" fn trunc<T, U>(v: T): U;

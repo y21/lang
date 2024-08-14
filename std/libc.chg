@@ -1,0 +1,16 @@
+// memory
+extern "C" fn malloc(size: u64): ()*;
+extern "C" fn free(ptr: ()*);
+extern "C" fn realloc(ptr: ()*, size: u64): ()*;
+extern "C" fn memcpy(dest: ()*, src: ()*, n: u64);
+
+// other
+extern "C" fn abort();
+extern "C" fn exit(code: i32);
+
+// io
+extern "C" fn printf(s: i8*);
+extern "C" fn write(fd: i32, buf: i8*, size: u64): i32;
+extern "C" fn read(fd: i32, buf: i8*, count: u64): i32;
+extern "C" fn open(pathname: i8*, flags: i32): i32;
+extern "C" fn perror(p: i8*);

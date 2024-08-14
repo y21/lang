@@ -1,0 +1,20 @@
+mod intrinsics;
+mod libc;
+mod ptr;
+mod mem;
+mod str;
+
+fn print(s: str*) {
+    let parts = str::StrRepr::from(s);
+    libc::write(1, ptr::cast(parts.ptr), parts.len);
+}
+
+fn println(s: str*) {
+  print(s);
+  print("\n");
+}
+
+fn fatal(s: str*) {
+  print(s);
+  libc::abort();
+}
