@@ -150,7 +150,7 @@ declare void @abort()
 
 @ct.0 = private constant [19 x i8] c"index out of bounds"
 
-define {i8*, i64, i64} @mk_vec$LT$i8$GT$() {
+define {i8*, i64, i64} @root$mk_vec$LT$i8$GT$() {
 prologue:
 %l.0 = alloca {i8*, i64, i64}
 br label %bb.0
@@ -174,7 +174,7 @@ ret {i8*, i64, i64} %ret.7
 
 }
 
-define void @push$LT$i8$GT$({i8*, i64, i64}* %lt.0, i8 %lt.1) {
+define void @root$push$LT$i8$GT$({i8*, i64, i64}* %lt.0, i8 %lt.1) {
 prologue:
 %l.0 = alloca {i8*, i64, i64}*
 %l.1 = alloca i8
@@ -283,7 +283,7 @@ br label %bb.5
 
 }
 
-define {i8*, i64} @str_repr({i8*, i64} %lt.1) {
+define {i8*, i64} @root$str_repr({i8*, i64} %lt.1) {
 prologue:
 %l.0 = alloca {i8*, i64}
 %l.1 = alloca {i8*, i64}
@@ -302,7 +302,7 @@ ret {i8*, i64} %ret.2
 
 }
 
-define void @print({i8*, i64} %lt.0) {
+define void @root$print({i8*, i64} %lt.0) {
 prologue:
 %l.0 = alloca {i8*, i64}
 %l.1 = alloca {i8*, i64}
@@ -311,7 +311,7 @@ br label %bb.0
 
 bb.0:
 %l.3 = load {i8*, i64}, {i8*, i64}* %l.0
-%l.2 = call {i8*, i64} @str_repr({i8*, i64} %l.3)
+%l.2 = call {i8*, i64} @root$str_repr({i8*, i64} %l.3)
 br label %bb.1
 
 bb.1:
@@ -328,7 +328,7 @@ ret void
 
 }
 
-define i8* @at$LT$i8$GT$({i8*, i64, i64}* %lt.1, i64 %lt.2) {
+define i8* @root$at$LT$i8$GT$({i8*, i64, i64}* %lt.1, i64 %lt.2) {
 prologue:
 %l.0 = alloca i8*
 %l.1 = alloca {i8*, i64, i64}*
@@ -346,7 +346,7 @@ bb.0:
 br i1 %l.5, label %bb.1, label %bb.2
 
 bb.1:
-%l.6 = call {} bitcast(void({i8*, i64})* @print to {}({i8*, i64})*)({i8*, i64} {i8* bitcast([19 x i8]* @ct.0 to i8*), i64 19})
+%l.6 = call {} bitcast(void({i8*, i64})* @root$print to {}({i8*, i64})*)({i8*, i64} {i8* bitcast([19 x i8]* @ct.0 to i8*), i64 19})
 br label %bb.3
 
 bb.2:
@@ -382,18 +382,18 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.1 = call {i8*, i64, i64} @mk_vec$LT$i8$GT$()
+%l.1 = call {i8*, i64, i64} @root$mk_vec$LT$i8$GT$()
 br label %bb.1
 
 bb.1:
 store {i8*, i64, i64} %l.1, {i8*, i64, i64}* %l.0
 %l.3 = bitcast {i8*, i64, i64}* %l.0 to {i8*, i64, i64}*
-%l.2 = call {} bitcast(void({i8*, i64, i64}*, i8)* @push$LT$i8$GT$ to {}({i8*, i64, i64}*, i8)*)({i8*, i64, i64}* %l.3, i8 45)
+%l.2 = call {} bitcast(void({i8*, i64, i64}*, i8)* @root$push$LT$i8$GT$ to {}({i8*, i64, i64}*, i8)*)({i8*, i64, i64}* %l.3, i8 45)
 br label %bb.2
 
 bb.2:
 %l.5 = bitcast {i8*, i64, i64}* %l.0 to {i8*, i64, i64}*
-%l.4 = call i8* @at$LT$i8$GT$({i8*, i64, i64}* %l.5, i64 0)
+%l.4 = call i8* @root$at$LT$i8$GT$({i8*, i64, i64}* %l.5, i64 0)
 br label %bb.3
 
 bb.3:

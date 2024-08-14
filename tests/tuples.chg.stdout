@@ -31,7 +31,7 @@ expr @ 7:16 11:1 => ()
 
 
 
-define void @t1() {
+define void @root$t1() {
 prologue:
 br label %bb.0
 
@@ -40,7 +40,7 @@ ret void
 
 }
 
-define void @t2() {
+define void @root$t2() {
 prologue:
 br label %bb.0
 
@@ -49,7 +49,7 @@ ret void
 
 }
 
-define {{}} @t3() {
+define {{}} @root$t3() {
 prologue:
 %l.0 = alloca {{}}
 br label %bb.0
@@ -67,7 +67,7 @@ ret {{}} %ret.5
 
 }
 
-define {{}, {}} @t4() {
+define {{}, {}} @root$t4() {
 prologue:
 %l.0 = alloca {{}, {}}
 br label %bb.0
@@ -89,7 +89,7 @@ ret {{}, {}} %ret.8
 
 }
 
-define {{}, i32, {}} @t5() {
+define {{}, i32, {}} @root$t5() {
 prologue:
 %l.0 = alloca {{}, i32, {}}
 br label %bb.0
@@ -119,23 +119,23 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.1 = call {} bitcast(void()* @t1 to {}()*)()
+%l.1 = call {} bitcast(void()* @root$t1 to {}()*)()
 br label %bb.1
 
 bb.1:
-%l.2 = call {} bitcast(void()* @t2 to {}()*)()
+%l.2 = call {} bitcast(void()* @root$t2 to {}()*)()
 br label %bb.2
 
 bb.2:
-%l.3 = call {{}} @t3()
+%l.3 = call {{}} @root$t3()
 br label %bb.3
 
 bb.3:
-%l.4 = call {{}, {}} @t4()
+%l.4 = call {{}, {}} @root$t4()
 br label %bb.4
 
 bb.4:
-%l.5 = call {{}, i32, {}} @t5()
+%l.5 = call {{}, i32, {}} @root$t5()
 br label %bb.5
 
 bb.5:

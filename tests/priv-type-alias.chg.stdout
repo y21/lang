@@ -22,7 +22,7 @@ expr @ 11:16 14:1 => ()
 
 
 
-define {i32, i32} @mkPoint$LT$i32$GT$(i32 %lt.1, i32 %lt.2) {
+define {i32, i32} @root$mkPoint$LT$i32$GT$(i32 %lt.1, i32 %lt.2) {
 prologue:
 %l.0 = alloca {i32, i32}
 %l.1 = alloca i32
@@ -46,7 +46,7 @@ ret {i32, i32} %ret.4
 
 }
 
-define {i32, i32} @notAllowed() {
+define {i32, i32} @root$notAllowed() {
 prologue:
 %l.0 = alloca {i32, i32}
 br label %bb.0
@@ -70,7 +70,7 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.1 = call {i32, i32} @mkPoint$LT$i32$GT$(i32 1, i32 2)
+%l.1 = call {i32, i32} @root$mkPoint$LT$i32$GT$(i32 1, i32 2)
 br label %bb.1
 
 bb.1:
@@ -78,7 +78,7 @@ bb.1:
 store {i32, i32} %l.1, {i32, i32}* %t.0
 %t.1 = getelementptr {i32, i32}, {i32, i32}* %t.0, i32 0, i32 0
 %l.2 = load i32, i32* %t.1
-%l.3 = call {i32, i32} @notAllowed()
+%l.3 = call {i32, i32} @root$notAllowed()
 br label %bb.2
 
 bb.2:

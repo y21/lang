@@ -72,8 +72,10 @@ export type Resolutions = {
     patResolutions: PatResolutions,
     breakableResolutions: Map<Expr, Breakable>,
     impls: EarlyImpls,
+    itemUniquePathsForCodegen: ItemPathMap,
     entrypoint: FnDecl
 };
+export type ItemPathMap = Map<ValueResolution | TypeResolution, string>;
 
 export type BreakableType = 'While';
 export type Breakable = { type: BreakableType, target: { type: 'While' } & Expr };
@@ -137,6 +139,7 @@ export function computeResolutions(ast: Module): Resolutions {
     const valueResolutions: ValueResolutions = new Map();
     const patResolutions: PatResolutions = new Map();
     const tyResolutions: TypeResolutions = new Map();
+    const itemUniquePathsForCodegen = new Map();
     const impls: EarlyImpls = [];
 
     // The scope in which the enclosing type alias is defined in.
@@ -252,11 +255,12 @@ export function computeResolutions(ast: Module): Resolutions {
     // You should call this when visiting any kind of item (type or value) that can be "late resolved", i.e.
     // nodes that can be referenced before its definition.
     // This tries to find unresolveds that can be resolved with this definition
-    function lateResolveforItemDefinition<K, V>(
+    function lateResolveforItemDefinition<K, V extends ValueResolution | TypeResolution>(
         path: CanonicalPath,
         resMap: Map<K, V>,
         item: V
     ) {
+        itemUniquePathsForCodegen.set(item, path);
         processLateResolved(path, (unres) => {
             if (isPathReachableFrom(path, unres.fromPath, unres.path)) {
                 resMap.set(unres.node.value as K, item);
@@ -689,6 +693,7 @@ export function computeResolutions(ast: Module): Resolutions {
         impls,
         tyResolutions,
         valueResolutions,
+        itemUniquePathsForCodegen,
         patResolutions
     }
 }

@@ -1,0 +1,15 @@
+mod m1 {
+    fn foo() {}
+}
+mod m2 {
+    fn foo() {}
+}
+mod m3 {
+    fn main() {}
+}
+fn main() {
+    m1::foo();
+    m2::foo();
+    m3::main();
+    main();
+}

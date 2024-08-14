@@ -512,7 +512,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                             let mangledName: string;
                             switch (terminator.decl.type) {
                                 case 'FnDecl': {
-                                    const calleeMangled = mangleInstFn(terminator.decl, terminator.sig.args);
+                                    const calleeMangled = mangleInstFn(res, terminator.decl, terminator.sig.args);
                                     codegenFn(terminator.decl, terminator.sig.args);
                                     // NB: don't write to `output` here before the `argList` mapping, since that may compile values
                                     mangledName = calleeMangled;
@@ -560,7 +560,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             return output;
         }
 
-        const mangledName = mangleInstFn(decl, args);
+        const mangledName = mangleInstFn(res, decl, args);
         if (_codegenCache.has(mangledName)) return;
         _codegenCache.add(mangledName);
         const code = inner(decl, args)

@@ -67,7 +67,7 @@ expr @ 18:16 22:1 => ()
 
 
 
-define i8 @t1() {
+define i8 @root$t1() {
 prologue:
 %l.0 = alloca i8
 br label %bb.0
@@ -79,7 +79,7 @@ ret i8 %ret.0
 
 }
 
-define i16 @t2() {
+define i16 @root$t2() {
 prologue:
 %l.0 = alloca i16
 br label %bb.0
@@ -91,7 +91,7 @@ ret i16 %ret.0
 
 }
 
-define i32 @t3() {
+define i32 @root$t3() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -103,7 +103,7 @@ ret i32 %ret.0
 
 }
 
-define i64 @t4() {
+define i64 @root$t4() {
 prologue:
 %l.0 = alloca i64
 br label %bb.0
@@ -115,7 +115,7 @@ ret i64 %ret.0
 
 }
 
-define i8 @t5() {
+define i8 @root$t5() {
 prologue:
 %l.0 = alloca i8
 br label %bb.0
@@ -127,7 +127,7 @@ ret i8 %ret.0
 
 }
 
-define i8 @t55() {
+define i8 @root$t55() {
 prologue:
 %l.0 = alloca i8
 br label %bb.0
@@ -139,7 +139,7 @@ ret i8 %ret.0
 
 }
 
-define i16 @t6() {
+define i16 @root$t6() {
 prologue:
 %l.0 = alloca i16
 br label %bb.0
@@ -151,7 +151,7 @@ ret i16 %ret.0
 
 }
 
-define i32 @t7() {
+define i32 @root$t7() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -163,7 +163,7 @@ ret i32 %ret.0
 
 }
 
-define i64 @t8() {
+define i64 @root$t8() {
 prologue:
 %l.0 = alloca i64
 br label %bb.0
@@ -175,7 +175,7 @@ ret i64 %ret.0
 
 }
 
-define i1 @t9() {
+define i1 @root$t9() {
 prologue:
 %l.0 = alloca i1
 br label %bb.0
@@ -187,7 +187,7 @@ ret i1 %ret.0
 
 }
 
-define i1 @t10() {
+define i1 @root$t10() {
 prologue:
 %l.0 = alloca i1
 br label %bb.0
@@ -205,47 +205,47 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.1 = call i8 @t1()
+%l.1 = call i8 @root$t1()
 br label %bb.1
 
 bb.1:
-%l.2 = call i16 @t2()
+%l.2 = call i16 @root$t2()
 br label %bb.2
 
 bb.2:
-%l.3 = call i32 @t3()
+%l.3 = call i32 @root$t3()
 br label %bb.3
 
 bb.3:
-%l.4 = call i64 @t4()
+%l.4 = call i64 @root$t4()
 br label %bb.4
 
 bb.4:
-%l.5 = call i8 @t5()
+%l.5 = call i8 @root$t5()
 br label %bb.5
 
 bb.5:
-%l.6 = call i8 @t55()
+%l.6 = call i8 @root$t55()
 br label %bb.6
 
 bb.6:
-%l.7 = call i16 @t6()
+%l.7 = call i16 @root$t6()
 br label %bb.7
 
 bb.7:
-%l.8 = call i32 @t7()
+%l.8 = call i32 @root$t7()
 br label %bb.8
 
 bb.8:
-%l.9 = call i64 @t8()
+%l.9 = call i64 @root$t8()
 br label %bb.9
 
 bb.9:
-%l.10 = call i1 @t9()
+%l.10 = call i1 @root$t9()
 br label %bb.10
 
 bb.10:
-%l.11 = call i1 @t10()
+%l.11 = call i1 @root$t10()
 br label %bb.11
 
 bb.11:

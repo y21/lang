@@ -7,7 +7,7 @@ expr @ 4:11 7:1 => ()
 
 
 
-define void @foo() {
+define void @root$foo() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -23,7 +23,7 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.0 = call {} bitcast(void()* @foo to {}()*)()
+%l.0 = call {} bitcast(void()* @root$foo to {}()*)()
 br label %bb.1
 
 bb.1:

@@ -18,7 +18,7 @@ expr @ 4:11 14:1 => ()
 
 
 
-define void @f$LT$i32$GT$(i32 %lt.0, i32* %lt.1) {
+define void @root$f$LT$i32$GT$(i32 %lt.0, i32* %lt.1) {
 prologue:
 %l.0 = alloca i32
 %l.1 = alloca i32*
@@ -45,7 +45,7 @@ store i64 0, i64* %t.0
 %l.1 = load i32*, i32** %t.1
 store i32* %l.1, i32** %l.0
 %l.3 = load i32*, i32** %l.0
-%l.2 = call {} bitcast(void(i32, i32*)* @f$LT$i32$GT$ to {}(i32, i32*)*)(i32 1, i32* %l.3)
+%l.2 = call {} bitcast(void(i32, i32*)* @root$f$LT$i32$GT$ to {}(i32, i32*)*)(i32 1, i32* %l.3)
 br label %bb.1
 
 bb.1:

@@ -14,7 +14,7 @@ expr @ 8:16 11:1 => ()
 
 
 
-define i32 @d() {
+define i32 @root$a$d() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -26,7 +26,7 @@ ret i32 %ret.0
 
 }
 
-define i32 @c() {
+define i32 @root$a$b$c() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -44,11 +44,11 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.1 = call i32 @d()
+%l.1 = call i32 @root$a$d()
 br label %bb.1
 
 bb.1:
-%l.2 = call i32 @c()
+%l.2 = call i32 @root$a$b$c()
 br label %bb.2
 
 bb.2:
