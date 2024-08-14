@@ -1,8 +1,9 @@
-import { assert } from "console";
-import { Span, joinSpan, ppSpan } from "./span";
+import * as path from 'path';
+import { SourceMap, File, Span, joinSpan, ppSpan, addFileToSourceMap, spanFromFile } from "./span";
 import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
+import { assert } from './util';
 
 export type BinaryOp =
     | TokenType.Plus
@@ -99,12 +100,11 @@ export type Impl = {
     items: ImplItem[]
 };
 export type ModType = 'Outlined' | 'Inline';
-export type ModItem = { type: 'Mod' | 'FnDecl' | 'TyAlias' } & Stmt;
 export type Mod = {
     type: 'Mod',
     modType: ModType
     name: string,
-    items: ModItem[]
+    items: Stmt[]
 };
 export type TraitItem = { type: 'Fn', sig: AstFnSignature };
 export type Trait = {
@@ -135,7 +135,7 @@ export type AstTy = { type: 'Path', value: Path<AstTy> }
     | AstEnum
     | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] }
     | { type: 'Infer' };
-export type Program = { stmts: Stmt[] };
+export type Module = { stmts: Stmt[] };
 export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
 export type Associativity = LeftToRight | RightToLeft;
@@ -246,13 +246,13 @@ enum ParseContext {
     Subexpression
 }
 
-export function parse(src: string): Program {
-    const tokens = tokenize(src);
+export function parse(sm: SourceMap, file: File): Module {
+    const tokens = tokenize(sm, file);
     const stmts: Stmt[] = [];
     let i = 0;
 
     function snip(span: Span) {
-        return src.substring(span[0], span[1]);
+        return sm.source.substring(span[0], span[1]);
     }
 
     function expectIdent() {
@@ -954,24 +954,33 @@ export function parse(src: string): Program {
                 const name = expectIdent();
                 if (eatToken(TokenType.LBrace, false)) {
                     // Inline.
-                    const items: ModItem[] = [];
+                    const items: Stmt[] = [];
                     while (!eatToken(TokenType.RBrace, false)) {
                         const stmt = parseStmt();
-                        switch (stmt.type) {
-                            case 'Mod':
-                            case 'TyAlias':
-                            case 'FnDecl':
-                                items.push(stmt);
-                                break;
-                            default:
-                                throw new Error(`${stmt.type} cannot appear in modules`);
-                        }
+                        items.push(stmt);
                     }
 
                     return { type: 'Mod', modType: 'Inline', items, name, span: joinSpan(modKwSpan, tokens[i - 1].span) }
                 } else {
                     // Outlined in its own file.
-                    throw new Error('outlined modules are unimplemented');
+                    eatToken(TokenType.Semi);
+
+                    let normPath: string;
+                    if (file.isRoot) {
+                        normPath = path.join(path.dirname(file.path), name + '.chg');
+                    } else {
+                        normPath = path.join(path.resolve(path.basename(file.path, '.chg')), name + '.chg');
+                    }
+
+                    const modFile = addFileToSourceMap(sm, normPath, false);
+                    const { stmts } = parse(sm, modFile);
+                    return {
+                        type: 'Mod',
+                        modType: 'Outlined',
+                        items: stmts,
+                        name,
+                        span: spanFromFile(modFile)
+                    };
                 }
             }
             case TokenType.Impl: {
@@ -1044,7 +1053,7 @@ export function parse(src: string): Program {
     function parseStmt(): Stmt {
         const stmt = parseStmtOrTailExpr();
         if (stmt.type === 'TailExpr') {
-            throw new Error('no trailing expression expected at ' + ppSpan(src, stmt.value.span));
+            throw new Error('no trailing expression expected at ' + ppSpan(sm.source, stmt.value.span));
         } else {
             return stmt;
         }

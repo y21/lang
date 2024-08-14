@@ -1,4 +1,4 @@
-import { Span } from "./span";
+import { SourceMap, Span, File } from "./span";
 import { Token, TokenType } from "./token";
 
 function isAlphaStart(c: string) {
@@ -14,9 +14,10 @@ function isAlpha(c: string) {
     return isAlphaStart(c) || isDigit(c) || c === '_';
 }
 
-export function tokenize(src: string): Token[] {
+export function tokenize(sm: SourceMap, file: File): Token[] {
+    const src = sm.source;
     const tokens: Token[] = [];
-    for (let i = 0; i < src.length; i++) {
+    for (let i = file.startPos; i < file.endPos; i++) {
         let start = i;
 
         switch (src[i]) {

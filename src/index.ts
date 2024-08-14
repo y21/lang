@@ -5,9 +5,10 @@ import { options } from './cli';
 import { parse } from './parse';
 import { computeResolutions } from './resolve';
 import { typeck } from './typeck';
-import { ppSpan } from './span';
+import { addFileToSourceMap, createSourceMap, ppSpan } from './span';
 import { ppTy } from './ty';
 import { codegen } from './llvm';
+import path from 'path';
 
 function timed<T>(what: string, f: () => T): T {
     if (options.timings) {
@@ -21,18 +22,20 @@ function timed<T>(what: string, f: () => T): T {
 }
 
 (function () {
-    const src = fs.readFileSync(options.path, 'utf8');
-    const ast = timed('parse', () => parse(src));
+    const sm = createSourceMap();
+    const rootFile = addFileToSourceMap(sm, path.resolve(options.path), true);
+    const ast = timed('parse', () => parse(sm, rootFile));
     const resolutions = timed('name res', () => computeResolutions(ast));
-    const tyres = timed('typeck', () => typeck(src, ast, resolutions));
+    // TODO: stop passing sm.source everywhere and properly hide it behind the sourcemap
+    const tyres = timed('typeck', () => typeck(sm.source, ast, resolutions));
     if (options.verbose) {
-        tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(src, k.span)} => ${ppTy(v)}`));
+        tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(sm.source, k.span)} => ${ppTy(v)}`));
         console.log();
     }
     if (tyres.hadErrors) {
         return;
     }
-    const llir = timed('llir/mir codegen', () => codegen(src, resolutions, tyres));
+    const llir = timed('llir/mir codegen', () => codegen(sm.source, resolutions, tyres));
 
     if (options.printLlirOnly) {
         console.log(llir);

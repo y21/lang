@@ -1,5 +1,5 @@
 import { EarlyImpls } from "./impls";
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Program, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, ModItem, Trait } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait } from "./parse";
 import { assert, assertUnreachable, todo } from "./util";
 
 export enum PrimitiveTy {
@@ -84,7 +84,7 @@ type Unresolved = { fromPath: CanonicalPath, path: string, node: UnresolvedNode 
 type UnresolvedNode = { type: 'Expr', value: Expr } | { type: 'Ty', value: AstTy } | { type: 'Pat', value: Pat };
 type Unresolveds = Array<Unresolved>;
 
-export function computeResolutions(ast: Program): Resolutions {
+export function computeResolutions(ast: Module): Resolutions {
     let currentPath: CanonicalPath = 'root';
     const lastPathSegment = (path: string) => path.slice(path.lastIndexOf('::') + 2);
     const lastCurrentPathSegment = () => lastPathSegment(currentPath);
@@ -556,7 +556,6 @@ export function computeResolutions(ast: Program): Resolutions {
                 break;
             }
             case 'Mod': {
-                assert!(stmt.modType === 'Inline');
                 withNamedScope(stmt.name, () => {
                     for (const item of (stmt as Mod).items) {
                         visitStmt(item);

@@ -1,4 +1,6 @@
+import { readFileSync } from "fs";
 import { assert } from "./util";
+import { isAbsolute } from "path";
 
 export type Span = [number, number];
 
@@ -50,4 +52,49 @@ export function spanInfo(src: string, span: Span): SpanInfo {
 export function ppSpan(src: string, span: Span): string {
     const inf = spanInfo(src, span);
     return `${inf.fromLine + 1}:${inf.fromCol + 1} ${inf.toLine + 1}:${inf.toCol + 1}`;
+}
+
+export type File = {
+    startPos: number,
+    endPos: number,
+    path: string,
+    isRoot: boolean
+};
+
+export type SourceMap = {
+    // stores all imported files in line
+    source: string,
+    files: File[]
+};
+
+export function createSourceMap(): SourceMap {
+    return {
+        source: '',
+        files: []
+    };
+}
+
+export function addFileToSourceMap(sm: SourceMap, path: string, isRoot: boolean): File {
+    assert(isAbsolute(path), 'file must be an absolute path');
+
+    const source = readFileSync(path, 'utf8');
+    const startPos = sm.source.length;
+    sm.source += source;
+    const file: File = {
+        path,
+        isRoot,
+        startPos,
+        endPos: startPos + source.length
+    };
+    sm.files.push(file);
+    return file;
+}
+
+export function spanFromFile(file: File): Span {
+    return [file.startPos, file.endPos];
+}
+
+export function fileFromSpan(sm: SourceMap, span: Span) {
+    // TODO: binary search since it's sorted
+    return sm.files.find(file => file.endPos > span[1]);
 }

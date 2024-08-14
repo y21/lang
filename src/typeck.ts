@@ -1,6 +1,6 @@
 import { options } from "./cli";
 import { fnInLateImpl, LateImpls } from "./impls";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Program, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait } from "./parse";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
 import { Span, ppSpan } from "./span";
 import { TokenType } from "./token";
@@ -153,7 +153,7 @@ function error(src: string, span: Span, message: string, note?: string) {
     }
 }
 
-export function typeck(src: string, ast: Program, res: Resolutions): TypeckResults {
+export function typeck(src: string, ast: Module, res: Resolutions): TypeckResults {
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
     const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
@@ -512,11 +512,11 @@ export function typeck(src: string, ast: Program, res: Resolutions): TypeckResul
                             segmentsAndGenerics = [
                                 [ty, callee.decl.parent.generics],
                                 [assoc, callee.decl.sig.generics],
-                            ]
+                            ];
                         } else {
                             // This is a call to a free function.
                             segmentsAndGenerics = [
-                                [expr.callee.path.segments[0], callee.decl.sig.generics]
+                                [expr.callee.path.segments[expr.callee.path.segments.length - 1], callee.decl.sig.generics]
                             ];
                         }
 
