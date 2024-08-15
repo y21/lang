@@ -7,6 +7,7 @@ import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, eqTy, TyParamCheck, genericArgsOfTy } from "./ty";
 import { assert, assertUnreachable, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
+import { bug, err, emitErrorRaw as error, spanless_bug } from './error';
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock';
@@ -110,7 +111,7 @@ class Infcx {
         f();
         const { expectedReturnTy, returnFound } = this.fnStack.pop()!;
         if (!isUnit(expectedReturnTy) && !returnFound) {
-            throw `Expected ${expectedReturnTy.type}, got ()`;
+            spanless_bug(`expected ${expectedReturnTy.type}, got ()`);
         }
     }
 
@@ -131,26 +132,6 @@ class Infcx {
 
 export function returnTy(sig: AstFnSignature, typeck: TypeckResults): Ty {
     return sig.ret ? typeck.loweredTys.get(sig.ret)! : UNIT;
-}
-
-function error(src: string, span: Span, message: string, note?: string) {
-    const red = (text: string) => options.colors ? `\x1b[1;31m${text}\x1b[0m` : text;
-
-    let lineStart = src.lastIndexOf('\n', span[0]);
-    let lineEnd = src.indexOf('\n', span[1]);
-    const col = span[0] - lineStart;
-    const snipLen = span[1] - span[0];
-    const line = src.substring(lineStart, lineEnd);
-
-    console.error('');
-    console.error(line);
-    console.error(' '.repeat(col - 1) + red(
-        '^'.repeat(snipLen) +
-        `  ${message}`));
-    if (note) {
-        console.error();
-        console.error('note: ' + note);
-    }
 }
 
 export function typeck(src: string, ast: Module, res: Resolutions): TypeckResults {
@@ -197,10 +178,10 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                             }
                             return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
                         case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
-                        case 'Mod': throw new Error('cannot lower module as a type');
-                        case 'Trait': throw new Error(`expected type, got trait ${ty.value}`);
+                        case 'Mod': bug(ty.span, 'cannot lower module as a type');
+                        case 'Trait': bug(ty.span, `expected type, got trait ${ty.value}`);
                         case 'Self': return lowerTy(tyres.selfTy);
-                        case 'Root': throw new Error('cannot lower root paths');
+                        case 'Root': bug(ty.span, 'cannot lower root paths');
                         default: assertUnreachable(tyres)
                     }
                 }
@@ -232,8 +213,8 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     }
                     return { type: 'Tuple', flags, elements };
                 }
-                case 'Alias': throw new Error('cannot lower type aliases directly');
-                case 'Infer': throw new Error('cannot lower `_` here');
+                case 'Alias': bug(ty.span, 'cannot lower type aliases directly');
+                case 'Infer': bug(ty.span, 'cannot lower `_` here');
                 case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: ty };
                 default: assertUnreachable(ty);
             }
@@ -247,7 +228,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
         const ret = sig.ret && lowerTy(sig.ret);
         for (const parameter of sig.parameters) {
             if (parameter.type === 'Receiver') {
-                if (!enclosingImplOrTrait) throw new Error('receiver outside of an impl or trait');
+                if (!enclosingImplOrTrait) spanless_bug('receiver outside of an impl or trait');
 
                 let recv: Ty;
                 if (enclosingImplOrTrait.type === 'Impl') {
@@ -346,7 +327,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                         case 'Variant': return { type: 'Enum', decl: pathres.enum, flags: EMPTY_FLAGS };
                     }
                 } else {
-                    throw new Error('unknown res in pattern');
+                    bug(pat.span, 'unknown res in pattern: ' + pathres);
                 }
             }
         }
@@ -410,7 +391,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                         return target.elemTy;
                     } else {
                         // TODO: constraint for tyvar
-                        throw `Cannot index into ${target.type}`
+                        err(expr.span, `cannot index into ${target.type}`);
                     }
                 }
                 // TODO: typescript's "as const" can create a literal type?
@@ -471,7 +452,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     if (pointee.type === 'Pointer') {
                         return pointee.pointee;
                     } else {
-                        throw `Attempted to dereference non-pointer type ${pointee.type}`;
+                        err(expr.span, `attempted to dereference non-pointer type ${pointee.type}`);
                     }
                 };
                 case 'Record': {
@@ -488,7 +469,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     const callee = typeckExpr(expr.callee);
                     if (expr.callee.type !== 'Path') {
                         // TODO: move the substitution stuff to typechecking paths specifically
-                        throw new Error('callee must be a path to a FnDef');
+                        bug(expr.span, 'callee must be a path to a FnDef');
                     }
 
                     const sig: InstantiatedFnSig = {
@@ -552,7 +533,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                             }
                         }
                     } else {
-                        throw new Error(`invalid callee: ${callee.type}`);
+                        bug(expr.span, `invalid callee: ${callee.type}`);
                     }
 
 
@@ -578,7 +559,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     const expectedCount = sig.parameters.length;
                     const gotCount = expr.args.length;
                     if (gotCount !== expectedCount) {
-                        throw new Error(`mismatched number of arguments; expected ${expectedCount}, got ${gotCount}`);
+                        err(expr.span, `mismatched number of arguments; expected ${expectedCount}, got ${gotCount}`);
                     }
 
                     for (let i = 0; i < gotCount; i++) {
@@ -593,19 +574,19 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                         case 'Record':
                             const field = target.fields.find(([k]) => k === expr.property);
                             if (!field) {
-                                throw new Error(`field '${expr.property}' not found on type ${ppTy(target)}`);
+                                err(expr.span, `field '${expr.property}' not found on type ${ppTy(target)}`);
                             }
                             return field[1];
                         case 'Tuple':
                             if (typeof expr.property !== 'number') {
-                                throw new Error('field access on tuple must be a number');
+                                err(expr.span, 'field access on tuple must be a number');
                             }
                             if (expr.property >= target.elements.length) {
-                                throw new Error(`tried to access field ${expr.property}, but tuple only has ${target.elements.length} elements`);
+                                err(expr.span, `tried to access field ${expr.property}, but tuple only has ${target.elements.length} elements`);
                             }
                             return target.elements[expr.property];
                         default:
-                            throw new Error(`property access requires record or tuple type, got ${ppTy(target)}`);
+                            err(expr.span, `property access requires record or tuple type, got ${ppTy(target)}`);
                     }
                 }
                 case 'If': {
@@ -673,11 +654,11 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     let selectedMethod = fnInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
 
                     if (!selectedMethod) {
-                        throw new Error(`method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`);
+                        err(expr.span, `method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`);
                     }
 
                     if (selectedMethod.decl.sig.parameters[0].type !== 'Receiver') {
-                        throw new Error(`selected method '${expr.path.ident}' does not have a receiver parameter`);
+                        err(expr.span, `selected method '${expr.path.ident}' does not have a receiver parameter`);
                     }
 
                     const genericArgs: Ty[] = [];
@@ -737,7 +718,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     selectedMethods.set(expr, selectedMethod);
 
                     if (expr.args.length !== sig.parameters.length - 1) {
-                        throw new Error(`argument length mismatch (${expr.args.length} != ${sig.parameters.length - 1})`);
+                        err(expr.span, `argument length mismatch (${expr.args.length} != ${sig.parameters.length - 1})`);
                     }
 
                     infcx.sub('FnArgument', expr.target.span, targetTy, sig.parameters[0]);
@@ -951,7 +932,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
             function reportTypeAnnotationsNeeded() {
                 for (const tyvar of infcx.tyVars) {
                     if (!tyvar.constrainedTy && !tyVarHasFallback(tyvar)) {
-                        error(src, tyVarOriginSpan(tyvar.origin), 'type annotations needed');
+                        error(src, tyVarOriginSpan(tyvar.origin), 'type error: type annotations needed');
                         errors = true;
                     }
                 }
@@ -1012,7 +993,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
             case 'FnDef':
             case 'ExternFnDef':
             case 'TraitFn':
-                throw new Error('cannot instantiate FnDef, this should be handled separately for fn calls');
+                spanless_bug('cannot instantiate FnDef, this should be handled separately for fn calls');
             case 'int':
             case 'str':
             case 'TyParam':

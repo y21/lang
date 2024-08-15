@@ -1,5 +1,7 @@
+import { bug, spanless_bug } from "./error";
 import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl, AstFnSignature } from "./parse";
 import { BindingPat, Resolutions, TraitFn, TypeResolution } from "./resolve";
+import { joinSpan } from "./span";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8, eqTy, TyParamCheck } from "./ty";
 import { InstantiatedFnSig, TypeckResults } from "./typeck";
@@ -66,7 +68,7 @@ const _mirBodyCache = new Map<string, MirBody>();
  */
 export function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], resolutions: Resolutions, typeck: TypeckResults): MirBody {
     function lowerMir(): MirBody {
-        if (decl.body.type !== 'Block') throw `${decl.sig.name} did not have a block as its body?`;
+        if (decl.body.type !== 'Block') bug(decl.body.span, `${decl.sig.name} did not have a block as its body?`);
 
         const astLocalToMirLocal = new Map<LetDecl | FnParameter | BindingPat, MirLocalId<false>>();
         const breakableInfo = new Map<{ type: 'While' } & Expr, BreakableInfo>();
@@ -150,7 +152,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
             if (place.type === 'Place') {
                 return place;
             } else {
-                throw new Error(`place was expected, got ${place.type}`);
+                spanless_bug(`place was expected, got ${place.type}`);
             }
         }
 
@@ -209,7 +211,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 case 'Number': {
                     const ity = typeck.exprTys.get(expr)!;
                     if (ity.type !== 'int') {
-                        throw new Error('number expression was not an int type');
+                        bug(expr.span, 'number expression was not an int type');
                     }
                     return { type: 'int', ity: ity.value, value: expr.value };
                 }
@@ -417,7 +419,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                 case 'bitcast': return transmutableIntrinsic('Bitcast');
                                 case 'ext': return transmutableIntrinsic('Ext');
                                 case 'trunc': return transmutableIntrinsic('Trunc');
-                                default: throw new Error(`unknown intrinsic: ${res.sig.name}`);
+                                default: bug(expr.span, `unknown intrinsic: ${res.sig.name}`);
                             }
                         }
                     }
@@ -438,10 +440,10 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             }
                         }
                         if (!callee) {
-                            throw new Error('fn impl not found');
+                            bug(expr.span, 'fn impl not found');
                         }
                     } else {
-                        throw new Error(`unknown callee type: ${callee.type}`);
+                        bug(expr.span, `unknown callee type: ${callee.type}`);
                     }
                     const res = addLocal(sig.ret, true);
 
@@ -463,7 +465,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     } else {
                         let base: MirLocalId;
                         if (val.type !== 'Local') {
-                            throw new Error('property base must be a local');
+                            bug(expr.span, 'property base must be a local');
                         } else {
                             base = val.value;
                         }
@@ -484,7 +486,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 case 'ArrayRepeat': {
                     const exprTy = typeck.exprTys.get(expr)!;
                     if (exprTy.type !== 'Array') {
-                        throw new Error('array literal did not produce array type');
+                        bug(expr.span, 'array literal did not produce array type');
                     }
 
                     const assignee = addLocal(exprTy, true);
@@ -675,7 +677,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         const nextCheckBlock = () => {
                             if (i === checkBranches.length - 1) {
                                 // A fallible pattern cannot be the last arm (currently; until we have exhaustive checking)
-                                throw new Error(`no check block to jump to if arm ${i} fails`);
+                                bug(joinSpan(arm.pat.span, arm.body.span), `no check block to jump to if this arm fails`);
                             }
                             return checkBranches[i + 1];
                         }
@@ -688,7 +690,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         switch (arm.pat.type) {
                             case 'Number': {
                                 if (scrutineeTy.type !== 'int') {
-                                    throw new Error('scrutinee is not an integer');
+                                    bug(arm.pat.span, 'scrutinee is not an integer');
                                 }
                                 mkScrutineeBinOp({ type: 'int', ity: scrutineeTy.value, value: arm.pat.value });
                                 break;

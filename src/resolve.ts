@@ -1,5 +1,7 @@
+import { bug, emitErrorRaw, err } from "./error";
 import { EarlyImpls } from "./impls";
 import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait } from "./parse";
+import { Span } from "./span";
 import { assert, assertUnreachable, todo } from "./util";
 
 export enum PrimitiveTy {
@@ -32,15 +34,6 @@ export function mkIntrinsic(name: IntrinsicName, generics: Generics, parameters:
     }
 }
 
-function identPathTy(ident: string): AstTy {
-    return { type: 'Path', value: { segments: [{ args: [], ident }] } };
-}
-
-const INTRINSICS: Intrinsic[] = [
-    mkIntrinsic('bitcast', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
-    mkIntrinsic('ext', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U')),
-    mkIntrinsic('trunc', ['T', 'U'], [{ type: 'Parameter', name: 'v', ty: identPathTy('T') }], identPathTy('U'))
-];
 export type TyParamResolution = {
     type: 'TyParam',
     id: number,
@@ -155,9 +148,9 @@ export function computeResolutions(ast: Module): Resolutions {
 
     const breakableStack: Breakable[] = [];
     const breakableResolutions: Map<Expr, Breakable> = new Map();
-    const findBreakable = () => {
+    const findBreakable = (at: Span) => {
         if (breakableStack.length === 0) {
-            throw new Error('no breakable found');
+            bug(at, 'no breakable found');
         }
         return breakableStack[breakableStack.length - 1];
     }
@@ -317,7 +310,7 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'Tuple': for (const elem of ty.elements) visitTy(elem); break;
             case 'Enum':
                 if (tyAliasScope === null) {
-                    throw new Error('enum types can currently only appear in type aliases');
+                    err(ty.span, 'enum types can currently only appear in type aliases');
                 }
                 withTyAliasScoped(ty.name, () => {
                     lateResolveforItemDefinition(currentPath, tyResolutions, ty);
@@ -407,7 +400,7 @@ export function computeResolutions(ast: Module): Resolutions {
                 break;
             case 'Break':
             case 'Continue': {
-                const target = findBreakable();
+                const target = findBreakable(expr.span);
                 breakableResolutions.set(expr, target);
                 break;
             }
@@ -627,7 +620,7 @@ export function computeResolutions(ast: Module): Resolutions {
                         }
                     };
                     if (!resolveInNs(valueNs) && !resolveInNs(typeNs)) {
-                        throw new Error(`cannot (late) resolve use path ${stmt.path.segments.map(s => s.ident).join('::')}`);
+                        bug(stmt.span, `cannot (late) resolve use path ${stmt.path.segments.map(s => s.ident).join('::')}`);
                         // TODO: figure out late resolution...
                         // lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
                     }
@@ -646,7 +639,7 @@ export function computeResolutions(ast: Module): Resolutions {
         visitStmt(stmt);
     }
     if (!entrypoint) {
-        throw new Error("'main' function not found");
+        err([0, 0], "'main' function not found");
     }
 
     for (const [, resolve] of unresolveds) {
@@ -663,7 +656,7 @@ export function computeResolutions(ast: Module): Resolutions {
 
                     if (isPathReachableFrom(canonicalPath, unres.fromPath, unres.path)) {
                         if (unres.node.type !== 'Expr') {
-                            throw new Error('reference to binding pattern must be an expression node');
+                            err(unres.node.value.span, 'reference to binding pattern must be an expression node');
                         }
 
                         valueResolutions.set(unres.node.value, bindingPat);
@@ -678,7 +671,7 @@ export function computeResolutions(ast: Module): Resolutions {
 
     // Go through the unresolveds one last time to report errors.
     for (const [, unres] of unresolveds) {
-        for (const { fromPath, path } of unres) {
+        for (const { fromPath, path, node } of unres) {
             console.error(`${fromPath}::${path} cannot be resolved`);
         }
     }

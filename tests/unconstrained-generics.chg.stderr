@@ -1,4 +1,4 @@
-
+type error: type annotations needed
 
     return foo();
-           ^^^^^  type annotations needed
+           ^^^^^

@@ -1,3 +1,4 @@
+import { spanless_bug } from "./error";
 import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, AstFnSignature, AstTy, } from "./parse";
 import { TraitFn } from "./resolve";
 import { assert } from "./util";
@@ -138,7 +139,7 @@ export function instantiateTy(ty: Ty, args: Ty[]): Ty {
         case 'FnDef':
         case 'ExternFnDef':
         case 'TraitFn':
-            throw new Error('attempted to instantiate FnDef');
+            spanless_bug('attempted to instantiate FnDef');
         case 'Pointer': {
             const pointee = instantiateTy(ty.pointee, args);
             return { ...ty, flags: pointee.flags, pointee };

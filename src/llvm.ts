@@ -19,6 +19,7 @@ import { TokenType } from "./token";
 import { Ty, normalize, UNIT, isUnit } from "./ty";
 import { TypeckResults, returnTy } from "./typeck";
 import { todo, assertUnreachable } from "./util";
+import { spanless_bug } from "./error";
 
 export function codegen(src: string, res: Resolutions, typeck: TypeckResults): string {
     const _codegenCache = new Set<string>();
@@ -43,7 +44,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
 
     function llEnum(def: AstEnum): string {
         if (def.variants.length > 256) {
-            throw new Error(`enum ${def.name} has too many variants`);
+            spanless_bug(`enum ${def.name} has too many variants`);
         } else {
             return 'i8';
         }
@@ -53,15 +54,15 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
         switch (ty.type) {
             case 'bool': return 'i1';
             case 'int': return `i${ty.value.bits}`;
-            case 'str': throw new Error('cannot directly lower str type');
+            case 'str': spanless_bug('cannot directly lower str type');
             case 'Pointer':
                 if (ty.pointee.type === 'str') {
                     return '{i8*, i64}';
                 } else {
                     return `${llTy(ty.pointee)}*`;
                 }
-            case 'ExternFnDef': throw new Error('extern fn in llir lowering');
-            case 'TyParam': throw new Error('uninstantiated type parameter in llir lowering');
+            case 'ExternFnDef': spanless_bug('extern fn in llir lowering');
+            case 'TyParam': spanless_bug('uninstantiated type parameter in llir lowering');
             case 'Array':
                 return `[${ty.len} x ${llTy(ty.elemTy)}]`;
             case 'TraitFn':
@@ -73,7 +74,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'Tuple': return '{' + ty.elements.map(llTy).join(', ') + '}';
             case 'TyVid':
             case 'never':
-                throw new Error(`${ty.type} should not appear in llir lowering`);
+                spanless_bug(`${ty.type} should not appear in llir lowering`);
             case 'Enum': return llEnum(ty.decl);
         }
     }
@@ -98,7 +99,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
             case 'Unreachable': todo('unreachable ty');
             case 'FnDef':
             case 'TraitFn':
-            case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
+            case 'ExternFnDef': spanless_bug(val.type + ' values need to be treated specially');
             case 'Record': return '{' + val.value.map(v => llValTy(mir, v[1])).join(', ') + '}';
             case 'Tuple': return '{' + val.value.map(v => llValTy(mir, v)).join(', ') + '}';
             case 'Variant': return llEnum(val.enum);
@@ -147,7 +148,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                     case 'Variant': return val.variant.toString();
                     case 'FnDef':
                     case 'TraitFn':
-                    case 'ExternFnDef': throw new Error(val.type + ' values need to be treated specially');
+                    case 'ExternFnDef': spanless_bug(val.type + ' values need to be treated specially');
                     case 'Record':
                     case 'Tuple': {
                         // in the codegen stage, records and tuples are almost identical, so we can largely handle them the same here...
@@ -245,13 +246,13 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                                     break;
                                 case 'Tuple':
                                     if (typeof projection.property !== 'number') {
-                                        throw new Error('non-numeric projection on tuple');
+                                        spanless_bug('non-numeric projection on tuple');
                                     }
                                     projectedIndex = projection.property;
                                     finalTy = normalize(oldTy.elements[projectedIndex]);
                                     break;
                                 default:
-                                    throw new Error('projection target must be a record or tuple type');
+                                    spanless_bug('projection target must be a record or tuple type');
                             }
 
                             output += `${finalLocal} = getelementptr ${oldTyS}, ${oldTyS}* ${oldBase}, i32 0, i32 ${projectedIndex}\n`;
@@ -259,13 +260,13 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                         }
                         case 'Deref': {
                             output += `${finalLocal} = load ${oldTyS}, ${oldTyS}* ${oldBase}\n`;
-                            if (oldTy.type !== 'Pointer') throw new Error('dereferencing non-ptr');
+                            if (oldTy.type !== 'Pointer') spanless_bug('dereferencing non-ptr');
                             finalTy = normalize(oldTy.pointee);
                             break;
                         }
                         case 'Index': {
                             if (finalTy.type !== 'Array') {
-                                throw new Error('index target must be an array');
+                                spanless_bug('index target must be an array');
                             }
                             const index = compileValueToLocal(projection.index);
                             const valTyS = llValTy(mir, projection.index);
@@ -409,7 +410,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                             break;
                         case 'Ext': {
                             if (stmt.from_ty.type !== 'int' || stmt.to_ty.type !== 'int') {
-                                throw new Error('ext intrinsic only works on int types');
+                                spanless_bug('ext intrinsic only works on int types');
                             }
                             let instruction = stmt.from_ty.value.signed ? 'sext' : 'zext';
                             const fromTyS = llTy(stmt.from_ty);
@@ -420,7 +421,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                         }
                         case 'Trunc': {
                             if (stmt.from_ty.type !== 'int' || stmt.to_ty.type !== 'int') {
-                                throw new Error('trunc intrinsic only works on int types');
+                                spanless_bug('trunc intrinsic only works on int types');
                             }
                             const fromTyS = llTy(stmt.from_ty);
                             const toTyS = llTy(stmt.to_ty);

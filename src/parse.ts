@@ -4,6 +4,7 @@ import { TokenType, tokenCanContinuePattern } from "./token";
 import { tokenize } from "./tokenize";
 import { I16, I32, I64, I8, IntTy, Ty, U16, U32, U64, U8 } from "./ty";
 import { assert } from './util';
+import { bug, err } from './error';
 
 export type BinaryOp =
     | TokenType.Plus
@@ -131,14 +132,14 @@ export type RecordFields<Ty> = ([string, Ty])[];
 export type AstVariant = { name: string };
 export type AstEnum = { type: 'Enum', name: string, variants: AstVariant[] };
 export type VariantId = number;
-export type AstTy = { type: 'Path', value: Path<AstTy> }
+export type AstTy = { span: Span } & ({ type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
     | { type: 'Tuple', elements: AstTy[] }
     | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
     | { type: 'Record', fields: RecordFields<AstTy> }
     | AstEnum
     | { type: 'Alias', alias: AstTy, constructibleIn: Path<never>[] }
-    | { type: 'Infer' };
+    | { type: 'Infer' });
 export type Module = { stmts: Stmt[] };
 export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
@@ -261,7 +262,9 @@ export function parse(sm: SourceMap, file: File): Module {
 
     function expectIdent() {
         const ident = tokens[i++];
-        if (ident.ty !== TokenType.Ident) throw new Error('Expected ident, got ' + TokenType[ident.ty]);
+        if (ident.ty !== TokenType.Ident) {
+            err(tokens[i - 1].span, 'expected ident, got ' + TokenType[ident.ty]);
+        }
         return snip(ident.span);
     }
 
@@ -271,7 +274,7 @@ export function parse(sm: SourceMap, file: File): Module {
             i++;
             return true;
         } else if (error) {
-            throw new Error(`Expected ${TokenType[ty]}, got ${TokenType[tok.ty]}`);
+            err(tok.span, `expected ${TokenType[ty]}, got ${TokenType[tok.ty]}`);
         } else {
             return false;
         }
@@ -323,7 +326,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     }
                     break;
                 }
-                default: throw `Unknown binary/infix operator for pattern: ${op}`;
+                default: bug(op.span, `unknown binary/infix operator for pattern: ${op}`);
             }
         }
 
@@ -337,7 +340,7 @@ export function parse(sm: SourceMap, file: File): Module {
             case 'Number': return { type: 'Number', value: expr.value, span: expr.span };
             case 'String': return { type: 'String', value: expr.value, span: expr.span };
             case 'Path': return { type: 'Path', path: expr.path, span: expr.span };
-            default: throw new Error(`${expr.type} cannot be used in pattern position`);
+            default: err(expr.span, `${expr.type} cannot be used in pattern position`);
         }
     }
 
@@ -375,9 +378,13 @@ export function parse(sm: SourceMap, file: File): Module {
 
         let ty: AstTy;
         switch (tokens[i].ty) {
-            case TokenType.Ident: ty = { type: 'Path', value: parseTyPath(x => x) }; break;
-            case TokenType.LBrace:
-                i++;
+            case TokenType.Ident: {
+                const startSpan = tokens[i].span;
+                ty = { type: 'Path', value: parseTyPath(x => x), span: joinSpan(startSpan, tokens[i].span) };
+                break;
+            }
+            case TokenType.LBrace: {
+                const lbraceSpan = tokens[i++].span;
                 const fields: RecordFields<AstTy> = [];
                 while (!eatToken(TokenType.RBrace, false)) {
                     eatToken(TokenType.Comma, false);
@@ -386,13 +393,14 @@ export function parse(sm: SourceMap, file: File): Module {
                     const value = parseTy();
                     fields.push([key, value]);
                 }
-                ty = { type: 'Record', fields };
+                ty = { type: 'Record', fields, span: joinSpan(lbraceSpan, tokens[i].span) };
                 break;
+            }
             case TokenType.LParen: {
-                i++;
+                const lparenSpan = tokens[i++].span;
                 if (eatToken(TokenType.RParen, false)) {
                     // Empty tuple type.
-                    ty = { type: 'Tuple', elements: [] };
+                    ty = { type: 'Tuple', elements: [], span: joinSpan(lparenSpan, tokens[i].span) };
                     break;
                 }
 
@@ -411,20 +419,20 @@ export function parse(sm: SourceMap, file: File): Module {
                         }
                         elements.push(parseTy());
                     }
-                    ty = { type: 'Tuple', elements };
+                    ty = { type: 'Tuple', elements, span: joinSpan(lparenSpan, tokens[i].span) };
                 }
                 break;
             }
-            case TokenType.Underscore: i++; return { type: 'Infer' };
+            case TokenType.Underscore: i++; return { type: 'Infer', span: tokens[i - 1].span };
             case TokenType.Enum:
-                i++;
+                const startSpan = tokens[i++].span;
                 let name: string | null = null;
                 if (tokens[i].ty === TokenType.Ident) {
                     name = snip(tokens[i++].span);
                 } else if (enclosingAlias !== null) {
                     name = enclosingAlias;
                 } else {
-                    throw new Error('anonymous enum must be a direct alias');
+                    err(tokens[i].span, 'anonymous enum must be a direct alias');
                 }
 
                 eatToken(TokenType.LBrace);
@@ -433,20 +441,20 @@ export function parse(sm: SourceMap, file: File): Module {
                     if (variants.length > 0) eatToken(TokenType.Comma);
                     variants.push({ name: expectIdent() });
                 }
-                ty = { type: 'Enum', name, variants };
+                ty = { type: 'Enum', name, variants, span: joinSpan(startSpan, tokens[i].span) };
                 break;
-            default: throw 'Unknown token for ty: ' + TokenType[tokens[i].ty];
+            default: err(tokens[i].span, 'unknown token for ty: ' + TokenType[tokens[i].ty]);
         }
 
         while (i < tokens.length) {
             if (eatToken(TokenType.LSquare, false)) {
                 const len = tokens[i++];
-                if (len.ty !== TokenType.Number) throw new Error('array must have a length component');
+                if (len.ty !== TokenType.Number) err(tokens[i - 1].span, 'array must have a length component');
                 eatToken(TokenType.RSquare, true);
-                ty = { type: 'Array', elemTy: ty, len: +snip(len.span) };
+                ty = { type: 'Array', elemTy: ty, len: +snip(len.span), span: joinSpan(ty.span, tokens[i].span) };
             } else if (eatToken(TokenType.Star, false)) {
                 const mtb: Mutability = tokens[i].ty === TokenType.Mut ? (i++, 'mut') : 'imm';
-                ty = { type: 'Pointer', mtb, pointeeTy: ty };
+                ty = { type: 'Pointer', mtb, pointeeTy: ty, span: joinSpan(ty.span, tokens[i].span) };
             } else {
                 break;
             }
@@ -474,7 +482,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     const unsuffixSpan: Span = [tokens[i].span[0], tokens[i].span[1] - foundSuffix[0].length]
                     const unsuffixSnip = +snip(unsuffixSpan);
                     if (!Number.isInteger(unsuffixSnip)) {
-                        throw new Error(`${unsuffixSnip} is not an integer`);
+                        err(unsuffixSpan, `${unsuffixSnip} is not an integer`);
                     }
 
                     expr = { type: 'Number', span: unsuffixSpan, suffix: (foundSuffix[1] as { type: 'int', value: IntTy }).value, value: unsuffixSnip };
@@ -499,7 +507,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     i += 2;
                     if (eatToken(TokenType.Lt, false)) {
                         if (lastWasGenericArgs) {
-                            throw new Error('cannot specify generic arguments on path twice');
+                            err(tokens[i - 1].span, 'cannot specify generic arguments on path twice');
                         }
                         lastWasGenericArgs = true;
                         const args: GenericArg<AstTy>[] = [];
@@ -550,7 +558,7 @@ export function parse(sm: SourceMap, file: File): Module {
                         // We have something like `[expr;`: this is an array repeat expression
                         const count = parseRootSubexpr();
                         if (count.type !== 'Number') {
-                            throw new Error(`array repeat expression must be a number, got ${count.type}`);
+                            err(count.span, `array repeat expression must be a number, got ${count.type}`);
                         }
                         eatToken(TokenType.RSquare);
                         return { type: 'ArrayRepeat', count: count.value, element: elements[0], span: joinSpan(span, tokens[i - 1].span) };
@@ -596,21 +604,21 @@ export function parse(sm: SourceMap, file: File): Module {
                     switch (char[1]) {
                         case 'n':
                             if (char.length > 2) {
-                                throw new Error('byte char literal can only contain one byte');
+                                err(tokens[i].span, 'byte char literal can only contain one byte');
                             }
                             char = '\n';
                             break;
-                        default: throw new Error('unknown escape sequence: ' + char[1]);
+                        default: err(tokens[i].span, 'unknown escape sequence: ' + char[1]);
                     }
                 } else if (char.length > 1) {
-                    throw new Error('byte char literal can only contain one byte');
+                    err(tokens[i].span, 'byte char literal can only contain one byte');
                 }
                 assert(char.length === 1, 'multibyte byte char literal after rewrite?');
 
                 expr = { type: 'ByteCharacter', span: tokens[i].span, value: char };
                 break;
             }
-            default: throw `Invalid token ${TokenType[tokens[i].ty]} at ${tokens[i].span} (expected bottom expression)`;
+            default: err(tokens[i].span, `invalid token ${TokenType[tokens[i].ty]} (expected bottom expression)`);
         }
         i++;
         return expr;
@@ -689,7 +697,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     // so that we don't parse `if ... else { 0 } + 1` as `else ({ 0 } + 1)`
                     _else = parseRootStmtExpr();
                     if (_else.type !== 'Block' && _else.type !== 'If') {
-                        throw new Error('else expression must be a block or another chained `if` expression');
+                        err(_else.span, 'else expression must be a block or another chained `if` expression');
                     }
                 }
                 expr = { type: 'If', condition, then: body, else: _else, span: joinSpan(ifSpan, tokens[i - 1].span) };
@@ -774,10 +782,11 @@ export function parse(sm: SourceMap, file: File): Module {
                 }
                 case TokenType.Dot: {
                     let property: string | number;
+                    const propertySpan = tokens[i].span;
                     switch (tokens[i].ty) {
                         case TokenType.Ident: property = snip(tokens[i++].span); break;
                         case TokenType.Number: property = +snip(tokens[i++].span); break;
-                        default: throw new Error('property must be a string or number');
+                        default: err(propertySpan, 'property must be a string or number');
                     }
 
                     // After the 'property', if we see :: or ( then this is a method call.
@@ -804,7 +813,7 @@ export function parse(sm: SourceMap, file: File): Module {
                                 args.push(parseRootSubexpr());
                             }
                             if (typeof property !== 'string') {
-                                throw new Error('method call property cannot be a number');
+                                err(propertySpan, 'method call property cannot be a number');
                             }
 
                             expr = { type: 'MethodCall', args, path: { args: genericArgs, ident: property }, target: expr, span: joinSpan(expr.span, tokens[i - 1].span) };
@@ -839,7 +848,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     expr = { type: 'Index', index, span: joinSpan(expr.span, tokens[i - 1].span), target: expr };
                     break;
                 }
-                default: throw `Unknown binary/infix operator for expression: ${op}`;
+                default: bug(op.span, `unknown binary/infix operator for expression: ${op}`);
             }
         }
 
@@ -900,7 +909,7 @@ export function parse(sm: SourceMap, file: File): Module {
                 i++;
                 const abi = parseRootSubexpr();
                 if (abi.type !== 'String' || (abi.value !== 'C' && abi.value !== 'intrinsic')) {
-                    throw new Error('extern abi must be a string and "C" or "intrinsic"');
+                    err(abi.span, 'extern abi must be a string and "C" or "intrinsic"');
                 }
 
                 eatToken(TokenType.Fn, true);
@@ -1009,7 +1018,7 @@ export function parse(sm: SourceMap, file: File): Module {
                     // We incorrectly parsed the trait reference as a type, but that's okay, paths are also types, so unwrap the path here
                     // and reparse the next thing as a type.
                     if (selfTy.type !== 'Path') {
-                        throw new Error('trait reference in impl must be a path');
+                        err(selfTy.span, 'trait reference in impl must be a path');
                     }
                     ofTrait = selfTy;
                     selfTy = parseTy();
@@ -1020,9 +1029,10 @@ export function parse(sm: SourceMap, file: File): Module {
                 let impl: { span: Span } & Impl = { type: 'Impl', items, selfTy, generics, ofTrait, span: implKwSpan };
                 while (!eatToken(TokenType.RBrace, false)) {
                     // Parse associated items.
+                    const sp = tokens[i].span;
                     const item = parseStmtOrTailExpr();
                     if (item.type !== 'FnDecl') {
-                        throw new Error('only functions are supported in impls for now');
+                        bug(sp, 'only functions are supported in impls for now');
                     }
                     item.parent = impl;
 
@@ -1050,11 +1060,11 @@ export function parse(sm: SourceMap, file: File): Module {
             case TokenType.Use: {
                 const useKwSpan = tokens[i++].span;
                 if (tokens[i].ty !== TokenType.Ident) {
-                    throw new Error('use must be followed by a path');
+                    err(tokens[i].span, 'use must be followed by a path');
                 }
                 const path: Path<never> = parseTyPath((segment) => {
                     if (segment.args.length > 0) {
-                        throw new Error('use path cannot have generics');
+                        err(tokens[i].span, 'use path cannot have generics');
                     }
                     return { ident: segment.ident, args: [] };
                 });
@@ -1086,7 +1096,7 @@ export function parse(sm: SourceMap, file: File): Module {
     function parseStmt(): Stmt {
         const stmt = parseStmtOrTailExpr();
         if (stmt.type === 'TailExpr') {
-            throw new Error('no trailing expression expected at ' + ppSpan(sm.source, stmt.value.span));
+            err(stmt.value.span, 'no trailing expression expected');
         } else {
             return stmt;
         }

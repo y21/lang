@@ -1,3 +1,4 @@
+import { spanless_bug } from "./error";
 import { FnDecl } from "./parse";
 import { ItemPathMap, Resolutions } from "./resolve";
 import { instantiateTy, Ty } from "./ty";
@@ -24,7 +25,7 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
         case 'FnDef':
         case 'ExternFnDef':
         case 'TraitFn':
-            throw new Error(`attempted to mangle ${ty.type}`);
+            spanless_bug(`attempted to mangle ${ty.type}`);
         case 'Pointer':
             return `$ptr$${ty.mtb}$${mangleTy(itemPathMap, ty.pointee)}`;
         case 'Alias': {

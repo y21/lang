@@ -1,4 +1,4 @@
-
+type error: i64 is not assignable to i32
 
     let y: i32 = 1i64;
-    ^^^^^^^^^^^^^^^^^^  type error: i64 is not assignable to i32
+    ^^^^^^^^^^^^^^^^^^

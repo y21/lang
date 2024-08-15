@@ -1,8 +1,8 @@
-
+type error: type annotations needed
 
   let x = bitcast(0);
-          ^^^^^^^^^^  type annotations needed
-
+          ^^^^^^^^^^
+type error: type annotations needed
 
   x = bitcast(1);
-      ^^^^^^^^^^  type annotations needed
+      ^^^^^^^^^^

@@ -1,3 +1,4 @@
+import { err } from "./error";
 import { SourceMap, Span, File } from "./span";
 import { Token, TokenType } from "./token";
 
@@ -187,7 +188,7 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                     i--;
                     tokens.push({ span, ty: TokenType.Number });
                 } else {
-                    throw 'Unknown token: ' + src[i];
+                    err([i, i + 1], 'Unknown token: ' + src[i]);
                 }
         }
     }
