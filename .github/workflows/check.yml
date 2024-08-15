@@ -1,4 +1,4 @@
-name: ui tests
+name: ci
 on: push
 jobs:
     test:
@@ -14,3 +14,5 @@ jobs:
               run: npx tsc
             - name: Run ui tests
               run: node dist/ui
+            - name: Build std
+              run: echo 'mod std; fn main() {}' > main.chg && node . main.chg
