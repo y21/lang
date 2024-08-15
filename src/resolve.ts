@@ -205,10 +205,19 @@ export function computeResolutions(ast: Module): Resolutions {
         }
     }
 
-    function tryEarlyResolveRelativePath<T>(input: Path<AstTy>, namespaceMap: Map<CanonicalPath, T>): T | undefined {
+    const enum ResolveModules {
+        Yes,
+        No
+    }
+
+    function tryEarlyResolveRelativePath<T extends ValueResolution | TypeResolution>(
+        input: Path<AstTy>,
+        namespaceMap: Map<CanonicalPath, T>,
+        resMod: ResolveModules
+    ): T | undefined {
         return forEachResolvablePath(currentPath, input.segments.map(s => s.ident).join('::'), (path) => {
             let resolved: T | undefined;
-            if (resolved = namespaceMap.get(path)) {
+            if ((resolved = namespaceMap.get(path)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
                 return ['break', resolved];
             }
             return 'continue';
@@ -432,10 +441,10 @@ export function computeResolutions(ast: Module): Resolutions {
     function visitPath<
         K extends Expr | AstTy | Pat,
         U extends ({ type: 'Expr', value: K } | { type: 'Pat', value: K } | { type: 'Ty', value: K }) & UnresolvedNode,
-        T
+        T extends TypeResolution | ValueResolution,
     >(path: Path<AstTy>, ref: U, ns: Map<string, T>, resMap: Map<K, T>) {
         let res: T | undefined;
-        if (res = tryEarlyResolveRelativePath(path, ns)) {
+        if (res = tryEarlyResolveRelativePath(path, ns, ResolveModules.No)) {
             resMap.set(ref.value, res);
         } else {
             addToUnresolveds(ref, path);
@@ -613,9 +622,9 @@ export function computeResolutions(ast: Module): Resolutions {
                 break;
             case 'Use': {
                 withNamedScope(stmt.alias || stmt.path.segments[stmt.path.segments.length - 1].ident, () => {
-                    const resolveInNs = <T>(ns: Map<string, T>): boolean => {
+                    const resolveInNs = <T extends TypeResolution | ValueResolution>(ns: Map<string, T>): boolean => {
                         let res: T | undefined;
-                        if (res = tryEarlyResolveRelativePath(stmt.path, ns)) {
+                        if (res = tryEarlyResolveRelativePath(stmt.path, ns, ResolveModules.Yes)) {
                             ns.set(currentPath, res);
                             return true;
                         } else {

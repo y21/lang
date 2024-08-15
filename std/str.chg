@@ -23,7 +23,7 @@ fn str_is_empty(s: str*): bool {
 fn byte_at(s: str*, pos: u64): u8 {
   let parts = StrRepr::from(s);
   if pos >= parts.len {
-    fatal("string index out of bounds");
+    root::std::fatal("string index out of bounds");
   }
   return *ptr_add(parts.ptr, pos);
 }
