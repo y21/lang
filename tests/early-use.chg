@@ -1,7 +1,9 @@
 mod foo {
     fn bar(): i32 { return 42; }
+    mod nested {}
 }
 use foo::bar;
+use foo::nested;
 fn main(): i32 {
     return bar();
 }

@@ -187,9 +187,10 @@ export function computeResolutions(ast: Module): Resolutions {
             }
 
             let modRes: TypeResolution | undefined;
-            if ((modRes = typeNs.get(tmpPath)) && modRes.type === 'Mod') {
-                // We've reached a module boundary. Stop walking up and try to resolve it as an absolute path one last time
-                todo('handle mod boundary');
+            if ((modRes = typeNs.get(path)) && modRes.type === 'Mod') {
+                // We've reached a module boundary. Stop walking up one-step and try to resolve it as an absolute path one last time
+                path = '';
+                continue;
             }
 
             if (path.length === 0) {
@@ -554,6 +555,8 @@ export function computeResolutions(ast: Module): Resolutions {
             }
             case 'Mod': {
                 withNamedScope(stmt.name, () => {
+                    typeNs.set(currentPath, stmt);
+                    lateResolveforItemDefinition(currentPath, typeNs, stmt);
                     for (const item of (stmt as Mod).items) {
                         visitStmt(item);
                     }
