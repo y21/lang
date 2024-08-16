@@ -1,0 +1,9 @@
+use root::std::mem::sizeof;
+use root::std::intrinsics::bitcast;
+
+fn signed_cast<T, U>(src: T): U {
+    if sizeof::<T>() != sizeof::<U>() {
+      root::std::fatal("T and U do not have the same type.");
+    }
+    return bitcast(src);
+}

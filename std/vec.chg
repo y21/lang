@@ -1,0 +1,50 @@
+use root::std::ptr::null;
+use root::std::ptr::is_null;
+use root::std::libc::malloc;
+use root::std::libc::free;
+use root::std::libc::realloc;
+use root::std::ptr;
+use root::std::mem::sizeof;
+
+type Vec<T> = { ptr: T*, len: u64, cap: u64 };
+
+impl<T> Vec<T> {
+  fn new(): Vec<T> {
+    return .{ ptr: ptr::null(), len: 0, cap: 0 };
+  }
+
+  fn with_capacity(cap: u64): Vec<T> {
+    let ptr = malloc(cap * sizeof::<T>());
+    return .{ ptr: ptr::cast(ptr), len: 0, cap: cap };
+  }
+
+  fn get(self*, index: u64): T* {
+    if index >= (*self).len {
+      root::std::fatal("index out of bounds");
+    }
+    return ptr::add((*self).ptr, index);
+  }
+
+  fn push(self*, value: T) {
+    if ptr::is_null((*self).ptr) {
+      (*self).ptr = ptr::cast::<(), T>(malloc(4 * sizeof::<T>()));
+      (*self).cap = 4;
+    }
+  
+    if (*self).len == (*self).cap {
+      (*self).cap *= 2;
+      (*self).ptr = ptr::cast::<(), T>(realloc(ptr::cast::<T, ()>((*self).ptr), (*self).cap));
+    }
+  
+    *ptr::add((*self).ptr, (*self).len) = value;
+    (*self).len += 1;
+  }
+
+  fn resize(self*, element: T, count: u64) {
+    let i = 0u64;
+    while i < count {
+      self.push(element);
+      i += 1;
+    }
+  }
+}

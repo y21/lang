@@ -1,6 +1,6 @@
 import { bug, emitErrorRaw, err } from "./error";
 import { EarlyImpls } from "./impls";
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl } from "./parse";
 import { Span } from "./span";
 import { assert, assertUnreachable, todo } from "./util";
 
@@ -75,7 +75,7 @@ export type Breakable = { type: BreakableType, target: { type: 'While' } & Expr 
 
 /////////////////////////
 type CanonicalPath = string;
-type Unresolved = { fromPath: CanonicalPath, path: string, node: UnresolvedNode };
+type Unresolved = { fromPath: CanonicalPath, path: Path<AstTy>, node: UnresolvedNode };
 type UnresolvedNode = { type: 'Expr', value: Expr } | { type: 'Ty', value: AstTy } | { type: 'Pat', value: Pat };
 type Unresolveds = Array<Unresolved>;
 
@@ -118,7 +118,7 @@ export function computeResolutions(ast: Module): Resolutions {
         let items: Unresolveds | undefined;
         const value: Unresolved = {
             fromPath: currentPath,
-            path: path.segments.map(s => s.ident).join('::'),
+            path,
             node: ref
         };
 
@@ -155,6 +155,13 @@ export function computeResolutions(ast: Module): Resolutions {
         return breakableStack[breakableStack.length - 1];
     }
 
+    // Maps canonical paths of use declarations to their resolved canonical path
+    // We use a separate map instead of a new 'UseDecl' type resolution kind for several reasons:
+    // - It's not a type so we'd be lying
+    // - It would require 'normalizing' (skipping) it everywhere explicitly.
+    //   We only care about special casing use decls specifically when visiting all possible paths.
+    const useResolutions = new Map<CanonicalPath, CanonicalPath>();
+
     function withTyAliasScoped(name: string, fn: () => void) {
         assert(tyAliasScope !== null);
         const old = currentPath;
@@ -174,12 +181,22 @@ export function computeResolutions(ast: Module): Resolutions {
         withNamedScope(`{${nextScopeId()}}`, fn);
     }
 
-    function forEachResolvablePath<T>(prefix: string, suffix: string, cb: (_: string) => ('continue' | ['break', T])): T | undefined {
-        assert(!suffix.startsWith('::'));
-
+    function forEachResolvablePath<T>(prefix: string, suffix: Path<AstTy>, cb: (_: string) => ('continue' | ['break', T])): T | undefined {
         let path = prefix;
         while (true) {
-            const tmpPath = path.length === 0 ? suffix : path + '::' + suffix;
+            let tmpPath = path;
+
+            // Gradually build up the path concatenation of the prefix with all segments of the suffix, one at a time.
+            // We might come across a use, which 'redirects' us elsewhere.
+            for (let i = 0; i < suffix.segments.length; i++) {
+                if (i > 0 || path.length > 0) tmpPath += '::';
+                tmpPath += suffix.segments[i].ident;
+
+                let useRes: CanonicalPath | undefined;
+                if (useRes = useResolutions.get(tmpPath)) {
+                    tmpPath = useRes;
+                }
+            }
 
             const ret = cb(tmpPath);
             if (ret !== 'continue') {
@@ -214,11 +231,11 @@ export function computeResolutions(ast: Module): Resolutions {
         input: Path<AstTy>,
         namespaceMap: Map<CanonicalPath, T>,
         resMod: ResolveModules
-    ): T | undefined {
-        return forEachResolvablePath(currentPath, input.segments.map(s => s.ident).join('::'), (path) => {
+    ): [T, string] | undefined {
+        return forEachResolvablePath(currentPath, input, (path) => {
             let resolved: T | undefined;
             if ((resolved = namespaceMap.get(path)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
-                return ['break', resolved];
+                return ['break', [resolved, path]];
             }
             return 'continue';
         });
@@ -246,7 +263,7 @@ export function computeResolutions(ast: Module): Resolutions {
     }
 
     // Checks if `to` is a path that is reachable from `from`.
-    function isPathReachableFrom(to: CanonicalPath, from_prefix: string, from_suffix: string): boolean {
+    function isPathReachableFrom(to: CanonicalPath, from_prefix: string, from_suffix: Path<AstTy>): boolean {
         return forEachResolvablePath(from_prefix, from_suffix, (path) => {
             if (path === to) {
                 return ['break', true];
@@ -283,7 +300,7 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'String':
                 break;
             case 'Path': {
-                const ret = forEachResolvablePath(currentPath, pat.path.segments.map(s => s.ident).join('::'), (path) => {
+                const ret = forEachResolvablePath(currentPath, pat.path, (path) => {
                     const res = valueNs.get(path);
                     if (res?.type === 'Variant') {
                         return ['break', res as PatResolution];
@@ -443,9 +460,9 @@ export function computeResolutions(ast: Module): Resolutions {
         U extends ({ type: 'Expr', value: K } | { type: 'Pat', value: K } | { type: 'Ty', value: K }) & UnresolvedNode,
         T extends TypeResolution | ValueResolution,
     >(path: Path<AstTy>, ref: U, ns: Map<string, T>, resMap: Map<K, T>) {
-        let res: T | undefined;
+        let res: [T, string] | undefined;
         if (res = tryEarlyResolveRelativePath(path, ns, ResolveModules.No)) {
-            resMap.set(ref.value, res);
+            resMap.set(ref.value, res[0]);
         } else {
             addToUnresolveds(ref, path);
         }
@@ -623,9 +640,10 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'Use': {
                 withNamedScope(stmt.alias || stmt.path.segments[stmt.path.segments.length - 1].ident, () => {
                     const resolveInNs = <T extends TypeResolution | ValueResolution>(ns: Map<string, T>): boolean => {
-                        let res: T | undefined;
+                        let res: [T, string] | undefined;
                         if (res = tryEarlyResolveRelativePath(stmt.path, ns, ResolveModules.Yes)) {
-                            ns.set(currentPath, res);
+                            ns.set(currentPath, res[0]);
+                            useResolutions.set(currentPath, res[1]);
                             return true;
                         } else {
                             return false;
@@ -656,7 +674,7 @@ export function computeResolutions(ast: Module): Resolutions {
 
     for (const [, resolve] of unresolveds) {
         for (const { fromPath, node, path } of resolve) {
-            const canonicalPath = `${fromPath}::${path}`;
+            const canonicalPath = `${fromPath}::${path.segments.map(s => s.ident).join('::')}`;
             if (node.type === 'Pat') {
                 const bindingPat: BindingPat = { type: 'Binding' };
 
@@ -684,7 +702,7 @@ export function computeResolutions(ast: Module): Resolutions {
     // Go through the unresolveds one last time to report errors.
     for (const [, unres] of unresolveds) {
         for (const { fromPath, path, node } of unres) {
-            console.error(`${fromPath}::${path} cannot be resolved`);
+            console.error(`${fromPath}::${path.segments.map(s => s.ident).join('::')} cannot be resolved`);
         }
     }
 

@@ -1,0 +1,21 @@
+use root::std::vec::Vec;
+use root::std::str::StrRepr;
+use root::std::ptr;
+
+type CString = Vec<i8>;
+
+impl CString {
+  fn from_str(s: str*): Self {
+    let repr = StrRepr::from(s);
+    let i = 0u64;
+    let data = Vec::new();
+
+    while i < repr.len {
+      (&data).push(*ptr::add(ptr::cast::<u8, i8>(repr.ptr), i));
+      i += 1;
+    }
+    (&data).push(0);
+
+    return data;
+  }
+}

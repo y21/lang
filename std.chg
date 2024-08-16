@@ -3,6 +3,9 @@ mod libc;
 mod mem;
 mod ptr;
 mod str;
+mod int;
+mod vec;
+mod cstr;
 
 fn print(s: str*) {
     let parts = str::StrRepr::from(s);
@@ -15,6 +18,6 @@ fn println(s: str*) {
 }
 
 fn fatal(s: str*) {
-  print(s);
+  println(s);
   libc::abort();
 }

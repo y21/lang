@@ -115,7 +115,7 @@ export type Trait = {
 };
 // `use x as y` => `{path: "x", alias: "y"}`
 // `use x::y` => `{path: "x::y", alias: null}`
-type UseDecl = { type: 'Use', path: Path<never>, alias: string | null };
+export type UseDecl = { type: 'Use', path: Path<never>, alias: string | null };
 export type Stmt = { span: Span } & (
     | { type: 'Expr', value: Expr }
     | LetDecl
