@@ -3,9 +3,11 @@ mod libc;
 mod mem;
 mod ptr;
 mod str;
-mod int;
 mod vec;
 mod cstr;
+mod string;
+mod int;
+mod fs;
 
 fn print(s: str*) {
     let parts = str::StrRepr::from(s);

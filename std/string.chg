@@ -1,0 +1,49 @@
+use root::std::vec::Vec;
+use root::std::str::StrRepr;
+use root::std::libc::memcpy;
+use root::std::ptr;
+
+type String = Vec<u8>;
+
+impl String {
+    fn new(): Self {
+        return Vec::new();
+    }
+
+    fn with_capacity(cap: u64): Self {
+        return Vec::with_capacity(cap);
+    }
+
+    fn from_vec(vec: Vec<u8>): Self {
+        return vec;
+    }
+
+    fn as_str(self*): str* {
+        return self.to_str_repr().to_str();
+    }
+
+    fn to_str_repr(self*): StrRepr {
+        return .{ ptr: (*self).ptr, len: (*self).len };
+    }
+
+    fn len(self*): u64 {
+        return (*self).len;
+    }
+
+    fn push_byte(self*, b: u8) {
+        Vec::push(self, b);
+    }
+}
+
+fn str_concat(s1: str*, s2: str*): String {
+  let s1r = StrRepr::from(s1);
+  let s2r = StrRepr::from(s2);
+
+  let res = Vec::with_capacity(s1r.len + s2r.len);
+
+  memcpy(ptr::cast::<u8, ()>(res.ptr), ptr::cast::<u8, ()>(s1r.ptr), s1r.len);
+  memcpy(ptr::cast::<u8, ()>(ptr::add(res.ptr, s1r.len)), ptr::cast::<u8, ()>(s2r.ptr), s2r.len);
+  res.len = s1r.len + s2r.len;
+
+  return res;
+}

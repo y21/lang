@@ -1,5 +1,9 @@
 use root::std::mem::sizeof;
 use root::std::intrinsics::bitcast;
+use root::std::intrinsics::ext;
+use root::std::intrinsics::trunc;
+use root::std::ptr;
+use root::std::string::String;
 
 fn signed_cast<T, U>(src: T): U {
     if sizeof::<T>() != sizeof::<U>() {
@@ -7,3 +11,4 @@ fn signed_cast<T, U>(src: T): U {
     }
     return bitcast(src);
 }
+
