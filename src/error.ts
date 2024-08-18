@@ -76,7 +76,8 @@ function extractLine(sm: SourceMap, span: Span): { line: string, lineStart: numb
 export function emitErrorRaw(sm: SourceMap, span: Span | null, message: string, note?: string, suggestions?: Suggestion[]) {
     const colored = (text: string, color: string) => options.colors ? `${color}${text}\x1b[0m` : text;
     const red = (text: string) => colored(text, '\x1b[1;31m');
-    const green = (text: string) => colored(text, '\x1b[38;5;10m');
+    const green = (text: string) => colored(text, '\x1b[1;32m');
+    const cyan = (text: string) => colored(text, '\x1b[1;36m');
 
     console.error(red(message));
     if (span) {
@@ -100,7 +101,7 @@ export function emitErrorRaw(sm: SourceMap, span: Span | null, message: string, 
 
     if (suggestions) {
         for (const suggestion of suggestions) {
-            console.error('\x1b[38;5;44mhelp: \x1b[0m' + suggestion.message);
+            console.error(cyan('help: ') + suggestion.message);
             console.error();
             assert(suggestion.replacements.length > 0);
 
