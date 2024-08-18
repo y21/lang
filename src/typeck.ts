@@ -2,12 +2,12 @@ import { options } from "./cli";
 import { fnInLateImpl, LateImpls } from "./impls";
 import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
-import { Span, ppSpan } from "./span";
+import { SourceMap, Span, ppSpan, shrinkToHi } from "./span";
 import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, eqTy, TyParamCheck, genericArgsOfTy } from "./ty";
 import { assert, assertUnreachable, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
-import { bug, err, emitErrorRaw as error, spanless_bug } from './error';
+import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
 type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock';
@@ -145,7 +145,7 @@ export function returnTy(sig: AstFnSignature, typeck: TypeckResults): Ty {
     return sig.ret ? typeck.loweredTys.get(sig.ret)! : UNIT;
 }
 
-export function typeck(src: string, ast: Module, res: Resolutions): TypeckResults {
+export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResults {
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
     const instantiatedFnSigs = new Map<Expr, InstantiatedFnSig>();
@@ -597,8 +597,21 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                 err(expr.span, `tried to access field ${expr.property}, but tuple only has ${target.elements.length} elements`);
                             }
                             return target.elements[expr.property];
-                        default:
-                            err(expr.span, `property access requires record or tuple type, got ${ppTy(target)}`);
+                        default: {
+                            const suggestions: Suggestion[] = [];
+                            if (target.type === 'Pointer') {
+                                suggestions.push({
+                                    message: 'consider using dereference-property syntax to access a property on the pointee',
+                                    replacements: [
+                                        {
+                                            span: shrinkToHi(expr.target.span),
+                                            replacement: '*'
+                                        },
+                                    ]
+                                })
+                            }
+                            err(expr.span, `property access requires record or tuple type, got ${ppTy(target)}`, undefined, suggestions);
+                        }
                     }
                 }
                 case 'If': {
@@ -748,7 +761,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
         }
         const t = inner(expr);
         if (t === undefined) {
-            assert(false, `type-checking ${ppSpan(src, expr.span)} returned invalid type`);
+            bug(expr.span, `type-checking expression returned invalid type`);
         }
         infcx.exprTys.set(expr, t);
         return t;
@@ -789,7 +802,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                 break;
                         }
                         error(
-                            src, constraint.at,
+                            sm, constraint.at,
                             `type error: overflow evaluating whether \`${pretty}\` holds`,
                             'consider adding type annotations to help inference'
                         );
@@ -800,13 +813,13 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     function subFields(parent: Constraint, sub: Ty & RecordType, sup: Ty & RecordType) {
                         if (sub.fields.length !== sup.fields.length) {
                             // Fast fail: no point in comparing fields when they lengths don't match.
-                            error(src, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
+                            error(sm, constraint.at, `type error: subtype has ${sub.fields.length} fields but supertype requires ${sup.fields.length}`);
                         } else {
                             for (let i = 0; i < sub.fields.length; i++) {
                                 const subf = sub.fields[i];
                                 const supf = sup.fields[i];
                                 if (subf[0] !== supf[0]) {
-                                    error(src, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
+                                    error(sm, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
                                 } else {
                                     infcx.nestedSub(parent, subf[1], supf[1]);
                                 }
@@ -832,7 +845,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                 subFields(constraint, sub, sup);
                             } else if (sub.type === 'Tuple' && sup.type === 'Tuple') {
                                 if (sub.elements.length !== sup.elements.length) {
-                                    error(src, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
+                                    error(sm, constraint.at, `type error: tuple size mismatch (${sub.elements.length} != ${sup.elements.length})`);
                                 } else {
                                     for (let i = 0; i < sub.elements.length; i++) {
                                         const subf = sub.elements[i];
@@ -842,7 +855,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                 }
                             } else if (sub.type === 'Array' && sup.type === 'Array') {
                                 if (sub.len !== sup.len) {
-                                    error(src, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
+                                    error(sm, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
                                 }
                                 infcx.nestedSub(constraint, sub.elemTy, sup.elemTy);
                             } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
@@ -857,7 +870,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                         // TODO: actually check this. figure out how to get the parentFn here
                                         && !sup.decl.constructibleIn.some((v) => true)
                                     ) {
-                                        error(src, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
+                                        error(sm, constraint.at, `error: '${sup.decl.name}' cannot be constructed here`);
                                     }
                                     subFields(constraint, sub, nsup);
                                 }
@@ -884,7 +897,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                     // attempting to constrain an integer variable to a non-int type
                                     const msub = sub === tyvid ? '{{integer}}' : ppTy(sub);
                                     const msup = sup === tyvid ? '{{integer}}' : ppTy(sup);
-                                    error(src, constraint.at, `type error: ${msub} is not assignable to ${msup}`);
+                                    error(sm, constraint.at, `type error: ${msub} is not assignable to ${msup}`);
                                     errors = true;
                                 } else {
                                     constrainVid(tyvid.id, other);
@@ -907,7 +920,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                                     default: message = `${ppTy(sub)} is not assignable to ${ppTy(sup)}`;
                                 }
 
-                                error(src, constraint.at, `type error: ${message}`);
+                                error(sm, constraint.at, `type error: ${message}`);
                                 errors = true;
                             }
                             break;
@@ -935,7 +948,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
 
                     if (fallback) {
                         if (options.verbose) {
-                            console.log(`fallback @ ${ppSpan(src, tyVarOriginSpan(tyvar.origin))}`);
+                            console.log(`fallback @ ${ppSpan(sm.source, tyVarOriginSpan(tyvar.origin))}`);
                         }
                         constrainVid(i, fallback);
                         fallbackApplied = true;
@@ -946,7 +959,7 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
             function reportTypeAnnotationsNeeded() {
                 for (const tyvar of infcx.tyVars) {
                     if (!tyvar.constrainedTy && !tyVarHasFallback(tyvar)) {
-                        error(src, tyVarOriginSpan(tyvar.origin), 'type error: type annotations needed');
+                        error(sm, tyVarOriginSpan(tyvar.origin), 'type error: type annotations needed');
                         errors = true;
                     }
                 }

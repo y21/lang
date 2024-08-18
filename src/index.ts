@@ -29,7 +29,7 @@ function timed<T>(what: string, f: () => T): T {
         const ast = timed('parse', () => parse(sm, rootFile));
         const resolutions = timed('name res', () => computeResolutions(ast));
         // TODO: stop passing sm.source everywhere and properly hide it behind the sourcemap
-        const tyres = timed('typeck', () => typeck(sm.source, ast, resolutions));
+        const tyres = timed('typeck', () => typeck(sm, ast, resolutions));
         if (options.verbose) {
             tyres.exprTys.forEach((v, k) => console.log(`expr @ ${ppSpan(sm.source, k.span)} => ${ppTy(v)}`));
             console.log();

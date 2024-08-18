@@ -1,4 +1,5 @@
 type error: str* is not assignable to {{integer}}
+ -> array-exprs-err.chg:1:16
 
     let x = [1, "a"];
                 ^^^

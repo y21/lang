@@ -1,4 +1,5 @@
 internal compiler error: no check block to jump to if this arm fails
+ -> non-exhaustive-patterns.chg:6:18
 
         Unnested::B => return 2
                   ^^^^^^^^^^^^^

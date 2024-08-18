@@ -8,6 +8,10 @@ export function joinSpan(a: Span, b: Span): Span {
     return [a[0], b[1]];
 }
 
+export function shrinkToHi(span: Span): Span {
+    return [span[1], span[1]];
+}
+
 // zero-based
 export type SpanInfo = { fromLine: number, fromCol: number, toLine: number, toCol: number };
 
