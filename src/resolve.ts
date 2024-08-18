@@ -1,8 +1,8 @@
-import { bug, emitErrorRaw, err } from "./error";
+import { bug, err } from "./error";
 import { EarlyImpls } from "./impls";
 import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl } from "./parse";
 import { Span } from "./span";
-import { assert, assertUnreachable, todo } from "./util";
+import { assert, assertUnreachable } from "./util";
 
 export enum PrimitiveTy {
     Never,
@@ -76,7 +76,10 @@ export type Breakable = { type: BreakableType, target: { type: 'While' } & Expr 
 /////////////////////////
 type CanonicalPath = string;
 type Unresolved = { fromPath: CanonicalPath, path: Path<AstTy>, node: UnresolvedNode };
-type UnresolvedNode = { type: 'Expr', value: Expr } | { type: 'Ty', value: AstTy } | { type: 'Pat', value: Pat };
+type UnresolvedNode = { type: 'Expr', value: Expr }
+    | { type: 'Ty', value: AstTy }
+    | { type: 'Pat', value: Pat }
+    | { type: 'Use', value: { span: Span } & UseDecl, declCanonicalPath: CanonicalPath };
 type Unresolveds = Array<Unresolved>;
 
 export function computeResolutions(ast: Module): Resolutions {
@@ -181,24 +184,29 @@ export function computeResolutions(ast: Module): Resolutions {
         withNamedScope(`{${nextScopeId()}}`, fn);
     }
 
-    function forEachResolvablePath<T>(prefix: string, suffix: Path<AstTy>, cb: (_: string) => ('continue' | ['break', T])): T | undefined {
+    function forEachResolvablePath<T>(prefix: string, suffix: Path<AstTy>, cb: (visiblePath: string, effectivePath: string) => ('continue' | ['break', T])): T | undefined {
         let path = prefix;
         while (true) {
-            let tmpPath = path;
+            let effectivePath = path;
+            let visiblePath = path;
 
             // Gradually build up the path concatenation of the prefix with all segments of the suffix, one at a time.
             // We might come across a use, which 'redirects' us elsewhere.
             for (let i = 0; i < suffix.segments.length; i++) {
-                if (i > 0 || path.length > 0) tmpPath += '::';
-                tmpPath += suffix.segments[i].ident;
+                if (i > 0 || path.length > 0) {
+                    effectivePath += '::';
+                    visiblePath += '::';
+                }
+                effectivePath += suffix.segments[i].ident;
+                visiblePath += suffix.segments[i].ident;
 
                 let useRes: CanonicalPath | undefined;
-                if (useRes = useResolutions.get(tmpPath)) {
-                    tmpPath = useRes;
+                if (useRes = useResolutions.get(effectivePath)) {
+                    effectivePath = useRes;
                 }
             }
 
-            const ret = cb(tmpPath);
+            const ret = cb(visiblePath, effectivePath);
             if (ret !== 'continue') {
                 return ret[1];
             }
@@ -232,10 +240,10 @@ export function computeResolutions(ast: Module): Resolutions {
         namespaceMap: Map<CanonicalPath, T>,
         resMod: ResolveModules
     ): [T, string] | undefined {
-        return forEachResolvablePath(currentPath, input, (path) => {
+        return forEachResolvablePath(currentPath, input, (_, effectivePath) => {
             let resolved: T | undefined;
-            if ((resolved = namespaceMap.get(path)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
-                return ['break', [resolved, path]];
+            if ((resolved = namespaceMap.get(effectivePath)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
+                return ['break', [resolved, effectivePath]];
             }
             return 'continue';
         });
@@ -264,8 +272,8 @@ export function computeResolutions(ast: Module): Resolutions {
 
     // Checks if `to` is a path that is reachable from `from`.
     function isPathReachableFrom(to: CanonicalPath, from_prefix: string, from_suffix: Path<AstTy>): boolean {
-        return forEachResolvablePath(from_prefix, from_suffix, (path) => {
-            if (path === to) {
+        return forEachResolvablePath(from_prefix, from_suffix, (visiblePath) => {
+            if (visiblePath === to) {
                 return ['break', true];
             }
             return 'continue';
@@ -282,8 +290,15 @@ export function computeResolutions(ast: Module): Resolutions {
     ) {
         itemUniquePathsForCodegen.set(item, path);
         processLateResolved(path, (unres) => {
+            // the usage path (unres) is somewhere in a nested scope.
+            // we walk *up* until we find a path that is in the resmap
             if (isPathReachableFrom(path, unres.fromPath, unres.path)) {
-                resMap.set(unres.node.value as K, item);
+                if (unres.node.type === 'Use') {
+                    useResolutions.set(unres.node.declCanonicalPath, path);
+                    lateResolveforItemDefinition(unres.node.declCanonicalPath, resMap, item);
+                } else {
+                    resMap.set(unres.node.value as K, item);
+                }
                 return 'remove';
             }
 
@@ -300,8 +315,8 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'String':
                 break;
             case 'Path': {
-                const ret = forEachResolvablePath(currentPath, pat.path, (path) => {
-                    const res = valueNs.get(path);
+                const ret = forEachResolvablePath(currentPath, pat.path, (_, effectivePath) => {
+                    const res = valueNs.get(effectivePath);
                     if (res?.type === 'Variant') {
                         return ['break', res as PatResolution];
                     }
@@ -582,7 +597,7 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'Mod': {
                 withNamedScope(stmt.name, () => {
                     typeNs.set(currentPath, stmt);
-                    lateResolveforItemDefinition(currentPath, typeNs, stmt);
+                    lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
                     for (const item of (stmt as Mod).items) {
                         visitStmt(item);
                     }
@@ -639,20 +654,20 @@ export function computeResolutions(ast: Module): Resolutions {
                 break;
             case 'Use': {
                 withNamedScope(stmt.alias || stmt.path.segments[stmt.path.segments.length - 1].ident, () => {
-                    const resolveInNs = <T extends TypeResolution | ValueResolution>(ns: Map<string, T>): boolean => {
+                    const resolveInNs = <K, T extends TypeResolution | ValueResolution>(resMap: Map<K, T>, ns: Map<string, T>): boolean => {
                         let res: [T, string] | undefined;
                         if (res = tryEarlyResolveRelativePath(stmt.path, ns, ResolveModules.Yes)) {
                             ns.set(currentPath, res[0]);
                             useResolutions.set(currentPath, res[1]);
+                            lateResolveforItemDefinition(currentPath, resMap, res[0]);
                             return true;
                         } else {
                             return false;
                         }
                     };
-                    if (!resolveInNs(valueNs) && !resolveInNs(typeNs)) {
-                        bug(stmt.span, `cannot (late) resolve use path ${stmt.path.segments.map(s => s.ident).join('::')}`);
-                        // TODO: figure out late resolution...
-                        // lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
+
+                    if (!resolveInNs(valueResolutions, valueNs) && !resolveInNs(tyResolutions, typeNs)) {
+                        addToUnresolveds({ type: 'Use', value: stmt, declCanonicalPath: currentPath }, stmt.path);
                     }
                 });
                 break;

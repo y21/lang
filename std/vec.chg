@@ -5,6 +5,7 @@ use root::std::libc::free;
 use root::std::libc::realloc;
 use root::std::ptr;
 use root::std::mem::sizeof;
+use root::std::fatal;
 
 type Vec<T> = { ptr: T*, len: u64, cap: u64 };
 
@@ -20,7 +21,7 @@ impl<T> Vec<T> {
 
   fn get(self*, index: u64): T* {
     if index >= (*self).len {
-      root::std::fatal("index out of bounds");
+      fatal("index out of bounds");
     }
     return ptr::add((*self).ptr, index);
   }

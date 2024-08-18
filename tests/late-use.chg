@@ -1,0 +1,23 @@
+use x as f1;
+
+use f3 as f4;
+
+fn x() {}
+
+use x as f2;
+
+use f1 as f3;
+
+use f4 as f5;
+
+fn main() {
+    f1();
+    f2();
+    f3();
+    f6();
+    f4();
+    f5();
+    f6();
+}
+
+use f5 as f6;

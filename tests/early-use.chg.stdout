@@ -20,7 +20,7 @@ ret void
 
 }
 
-define i32 @root$foo$bar() {
+define i32 @root$bar() {
 prologue:
 %l.0 = alloca i32
 br label %bb.0
@@ -42,7 +42,7 @@ bb.0:
 br label %bb.1
 
 bb.1:
-%l.2 = call i32 @root$foo$bar()
+%l.2 = call i32 @root$bar()
 br label %bb.2
 
 bb.2:

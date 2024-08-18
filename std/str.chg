@@ -1,5 +1,6 @@
 use root::std::intrinsics::bitcast;
-use root::std::ptr::add as ptr_add;
+use root::std::ptr;
+use root::std::fatal;
 
 type StrRepr = { ptr: u8*, len: u64 };
 
@@ -23,23 +24,23 @@ fn str_is_empty(s: str*): bool {
 fn byte_at(s: str*, pos: u64): u8 {
   let parts = StrRepr::from(s);
   if pos >= parts.len {
-    root::std::fatal("string index out of bounds");
+    fatal("string index out of bounds");
   }
-  return *ptr_add(parts.ptr, pos);
+  return *ptr::add(parts.ptr, pos);
 }
 
 fn substr_from(s: str*, from: u64): str* {
   let repr = StrRepr::from(s);
   if from > repr.len {
-    root::std::fatal("string out of bounds");
+    fatal("string out of bounds");
   }
-  return StrRepr::to_str(.{ ptr: ptr_add(repr.ptr, from), len: repr.len - from });
+  return StrRepr::to_str(.{ ptr: ptr::add(repr.ptr, from), len: repr.len - from });
 }
 
 fn substr_to(s: str*, to: u64): str* {
   let repr = StrRepr::from(s);
   if to >= repr.len {
-    root::std::fatal("string out of bounds");
+    fatal("string out of bounds");
   }
   return StrRepr::to_str(.{ ptr: repr.ptr, len: to });
 }
