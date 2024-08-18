@@ -23,7 +23,7 @@ impl String {
     }
 
     fn to_str_repr(self*): StrRepr {
-        return .{ ptr: (*self).ptr, len: (*self).len };
+        return .{ ptr: self*.ptr, len: self*.len };
     }
 
     fn len(self*): u64 {

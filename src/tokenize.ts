@@ -114,6 +114,9 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                 if (src[i + 1] === '=') {
                     tokens.push({ span: [start, i + 2], ty: TokenType.MulAssign });
                     i++;
+                } else if (src[i + 1] === '.') {
+                    tokens.push({ span: [start, i + 2], ty: TokenType.StarDot });
+                    i++;
                 } else {
                     tokens.push({ span: [start, i + 1], ty: TokenType.Star });
                 }

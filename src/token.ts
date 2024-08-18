@@ -46,6 +46,8 @@ export enum TokenType {
     Plus,
     Minus,
     Star,
+    // infix deref
+    StarDot,
     Slash,
     Percent,
     DotDot,

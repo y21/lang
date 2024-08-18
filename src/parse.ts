@@ -42,8 +42,8 @@ export type Expr = { span: Span } & (
     | { type: "String"; value: string }
     | { type: 'ByteCharacter', value: string }
     | { type: "Assignment"; op: AssignmentKind, target: Expr; value: Expr }
-    | { type: "Property"; target: Expr; property: string | number }
-    | { type: "MethodCall", target: Expr, path: PathSegment<AstTy>, args: Expr[] }
+    | { type: "Property"; deref: boolean /* target*.prop */, target: Expr; property: string | number }
+    | { type: "MethodCall", deref: boolean /* recv*.prop(); */, target: Expr, path: PathSegment<AstTy>, args: Expr[] }
     | { type: "Return"; value: Expr }
     | { type: 'Break' }
     | { type: 'Continue' }
@@ -187,6 +187,7 @@ const BINARY_INFIX_PRECEDENCE: { [index: string]: number | undefined } = {
     // Indexing `x[y]`
     [TokenType.LSquare]: 17,
     [TokenType.Dot]: 17,
+    [TokenType.StarDot]: 17,
     // Multiplicative
     [TokenType.Star]: 12,
     [TokenType.Slash]: 12,
@@ -216,6 +217,7 @@ const ASSOC: { [index: string]: Associativity | undefined } = {
     [TokenType.LParen]: 'ltr',
     [TokenType.Dot]: 'ltr',
     [TokenType.LSquare]: 'ltr',
+    [TokenType.StarDot]: 'ltr',
     [TokenType.Assign]: 'rtl',
     [TokenType.AddAssign]: 'rtl',
     [TokenType.SubAssign]: 'rtl',
@@ -780,7 +782,10 @@ export function parse(sm: SourceMap, file: File): Module {
                     expr = { type: 'FnCall', callee: expr, args, span: [expr.span[0], tokens[i - 1].span[1]] };
                     break;
                 }
-                case TokenType.Dot: {
+                case TokenType.Dot:
+                case TokenType.StarDot: {
+                    // x.y and x*.y are identical parsing wise for the most part
+
                     let property: string | number;
                     const propertySpan = tokens[i].span;
                     switch (tokens[i].ty) {
@@ -816,11 +821,23 @@ export function parse(sm: SourceMap, file: File): Module {
                                 err(propertySpan, 'method call property cannot be a number');
                             }
 
-                            expr = { type: 'MethodCall', args, path: { args: genericArgs, ident: property }, target: expr, span: joinSpan(expr.span, tokens[i - 1].span) };
+                            expr = {
+                                type: 'MethodCall',
+                                args,
+                                path: { args: genericArgs, ident: property },
+                                deref: op.ty === TokenType.StarDot,
+                                target: expr, span: joinSpan(expr.span, tokens[i - 1].span)
+                            };
                             break;
                         }
                         default:
-                            expr = { type: 'Property', target: expr, property, span: [expr.span[0], tokens[i - 1].span[1]] }
+                            expr = {
+                                type: 'Property',
+                                target: expr,
+                                property,
+                                span: [expr.span[0], tokens[i - 1].span[1]],
+                                deref: op.ty === TokenType.StarDot,
+                            }
                     }
 
                     break;

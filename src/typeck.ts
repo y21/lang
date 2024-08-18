@@ -78,6 +78,17 @@ function tyVarHasFallback(tyvar: InfTyVar): boolean {
     return originFallback(tyvar.origin) !== null;
 }
 
+function peelInfixDerefOpTy(isDeref: boolean, ty: Ty, span: Span): Ty {
+    if (isDeref) {
+        if (ty.type !== 'Pointer') {
+            err(span, `deref property access requires a pointer type, got ${ppTy(ty)}`)
+        }
+        return ty.pointee;
+    } else {
+        return ty;
+    }
+}
+
 export type LUBResult = { hadErrors: boolean };
 
 class Infcx {
@@ -569,7 +580,8 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     return sig.ret;
                 }
                 case 'Property': {
-                    const target = normalize(typeckExpr(expr.target));
+                    const target = normalize(peelInfixDerefOpTy(expr.deref, typeckExpr(expr.target), expr.span));
+
                     switch (target.type) {
                         case 'Record':
                             const field = target.fields.find(([k]) => k === expr.property);
@@ -648,7 +660,9 @@ export function typeck(src: string, ast: Module, res: Resolutions): TypeckResult
                     return armTy || NEVER;
                 }
                 case 'MethodCall': {
-                    const targetTy = typeckExpr(expr.target);
+                    const targetTy = peelInfixDerefOpTy(expr.deref, typeckExpr(expr.target), expr.span);
+
+                    // the pointe_e_ type is exclusively used for method lookup/selection
                     const derefTargetTy = targetTy.type === 'Pointer' ? targetTy.pointee : targetTy;
 
                     let selectedMethod = fnInLateImpl(lateImpls, derefTargetTy, expr.path.ident);

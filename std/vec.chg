@@ -20,25 +20,25 @@ impl<T> Vec<T> {
   }
 
   fn get(self*, index: u64): T* {
-    if index >= (*self).len {
+    if index >= self*.len {
       fatal("index out of bounds");
     }
-    return ptr::add((*self).ptr, index);
+    return ptr::add(self*.ptr, index);
   }
 
   fn push(self*, value: T) {
-    if ptr::is_null((*self).ptr) {
-      (*self).ptr = ptr::cast::<(), T>(malloc(4 * sizeof::<T>()));
-      (*self).cap = 4;
+    if ptr::is_null(self*.ptr) {
+      self*.ptr = ptr::cast::<(), T>(malloc(4 * sizeof::<T>()));
+      self*.cap = 4;
     }
   
-    if (*self).len == (*self).cap {
-      (*self).cap *= 2;
-      (*self).ptr = ptr::cast::<(), T>(realloc(ptr::cast::<T, ()>((*self).ptr), (*self).cap));
+    if self*.len == self*.cap {
+      self*.cap *= 2;
+      self*.ptr = ptr::cast::<(), T>(realloc(ptr::cast::<T, ()>(self*.ptr), self*.cap));
     }
   
-    *ptr::add((*self).ptr, (*self).len) = value;
-    (*self).len += 1;
+    *ptr::add(self*.ptr, self*.len) = value;
+    self*.len += 1;
   }
 
   fn resize(self*, element: T, count: u64) {

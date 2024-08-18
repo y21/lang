@@ -1,7 +1,28 @@
+extern "intrinsic" fn bitcast<T, U>(t: T): U;
+
+type V = { a: i32 };
+impl V {
+    fn by_value(self) {}
+    fn by_ref(self*) {}
+}
+
+fn i32_as_v(a: i32*): V* {
+    return bitcast(a);
+}
+
 fn main(): i32 {
     let x = (1,);
     let y = ((&x,),&x);
     let z = (&y, &x);
     (*(*z.0).0.0).0 = 42;
+
+    let i = 1;
+    let ar = i32_as_v(&i);
+    ar*.a;
+    i32_as_v(&i)*.a;
+    ar*.by_value();
+    i32_as_v(&i)*.by_value();
+    ar.by_ref();
+
     return (*(*z.0).0.0).0 + (*z.1).0;
 }

@@ -458,23 +458,12 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     return { type: 'Local', value: res };
                 }
                 case 'Property': {
-                    const val = lowerExpr(expr.target);
-                    if (val.type === 'Place') {
-                        val.projections.push({ type: 'Field', property: expr.property });
-                        return val;
-                    } else {
-                        let base: MirLocalId;
-                        if (val.type !== 'Local') {
-                            bug(expr.span, 'property base must be a local');
-                        } else {
-                            base = val.value;
-                        }
-                        return {
-                            type: 'Place',
-                            base: base,
-                            projections: [{ type: 'Field', property: expr.property }]
-                        }
+                    const val = requireAsPlace(lowerExpr(expr.target));
+                    if (expr.deref) {
+                        val.projections.push({ type: 'Deref' });
                     }
+                    val.projections.push({ type: 'Field', property: expr.property });
+                    return val;
                 }
                 case 'Index': {
                     const target = requireAsPlace(lowerExpr(expr.target));
@@ -773,7 +762,19 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 case 'MethodCall': {
                     const sig = instantiateFnSig(typeck.instantiatedFnSigs.get(expr)!, args);
-                    const receiver = asValue(lowerExpr(expr.target), typeck.exprTys.get(expr.target)!);
+
+                    let receiver: MirValue;
+                    if (expr.deref) {
+                        const recvPlace = requireAsPlace(lowerExpr(expr.target));
+                        recvPlace.projections.push({ type: 'Deref' });
+                        const ptrTy = typeck.exprTys.get(expr.target)!;
+                        if (ptrTy.type !== 'Pointer') {
+                            bug(expr.span, 'method call deref must be a pointer');
+                        }
+                        receiver = asValue(recvPlace, ptrTy.pointee);
+                    } else {
+                        receiver = asValue(lowerExpr(expr.target), typeck.exprTys.get(expr.target)!);
+                    }
                     const method = typeck.selectedMethods.get(expr)!;
 
                     const res = addLocal(sig.ret, true);
