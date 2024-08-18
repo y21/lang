@@ -4,7 +4,7 @@ import { BindingPat, Resolutions, TraitFn, TypeResolution } from "./resolve";
 import { joinSpan } from "./span";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8, eqTy, TyParamCheck } from "./ty";
-import { InstantiatedFnSig, TypeckResults } from "./typeck";
+import { exprTy as rawExprTy, InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert, todo } from "./util";
 
 export type MirValue = { type: 'int', ity: IntTy, value: number }
@@ -67,6 +67,8 @@ const _mirBodyCache = new Map<string, MirBody>();
  * calling `astToMir(f, [i32])` will create the MIR body for `function f(v: i32)`, and cache it.
  */
 export function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], resolutions: Resolutions, typeck: TypeckResults): MirBody {
+    const exprTy = (expr: Expr) => rawExprTy(typeck, expr);
+
     function lowerMir(): MirBody {
         if (decl.body.type !== 'Block') bug(decl.body.span, `${decl.sig.name} did not have a block as its body?`);
 
@@ -206,10 +208,10 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
 
         type LowerExprResult = MirValue | ({ type: 'Place' } & MirPlace);
 
-        function lowerExpr(expr: Expr): LowerExprResult {
+        function lowerExprInner(expr: Expr): LowerExprResult {
             switch (expr.type) {
                 case 'Number': {
-                    const ity = typeck.exprTys.get(expr)!;
+                    const ity = exprTy(expr);
                     if (ity.type !== 'int') {
                         bug(expr.span, 'number expression was not an int type');
                     }
@@ -249,13 +251,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     }
                 }
                 case 'Return': {
-                    const ret = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
+                    const ret = asValue(lowerExpr(expr.value), exprTy(expr.value));
                     return lowerReturnValue(ret);
                 }
                 case 'Binary': {
-                    const lhsTy = typeck.exprTys.get(expr.lhs)!;
+                    const lhsTy = exprTy(expr.lhs);
                     const lhs = asValue(lowerExpr(expr.lhs), lhsTy);
-                    const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
+                    const rhs = asValue(lowerExpr(expr.rhs), exprTy(expr.rhs));
                     switch (expr.op) {
                         case TokenType.AndAnd:
                         case TokenType.OrOr: {
@@ -316,21 +318,21 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             return { type: 'Local', value: copyRes };
                         }
                         default: {
-                            const res = addLocal(typeck.exprTys.get(expr)!, true);
+                            const res = addLocal(exprTy(expr), true);
                             block.stmts.push({ type: 'BinOp', assignee: res, lhs, lhsTy, rhs, op: expr.op });
                             return { type: 'Local', value: res };
                         }
                     }
                 }
                 case 'Unary': {
-                    const rhs = asValue(lowerExpr(expr.rhs), typeck.exprTys.get(expr.rhs)!);
-                    const res = addLocal(typeck.exprTys.get(expr)!, true);
+                    const rhs = asValue(lowerExpr(expr.rhs), exprTy(expr.rhs));
+                    const res = addLocal(exprTy(expr), true);
                     block.stmts.push({ type: 'Unary', assignee: res, rhs, op: expr.op });
                     return { type: 'Local', value: res };
                 }
                 case 'AddrOf': {
                     const pointee = requireAsPlace(lowerExpr(expr.pointee));
-                    const res = addLocal(typeck.exprTys.get(expr)!, true);
+                    const res = addLocal(exprTy(expr), true);
                     block.stmts.push({ type: 'AddrOf', assignee: res, place: pointee });
                     return { type: 'Local', value: res };
                 }
@@ -339,7 +341,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         case TokenType.Assign: {
                             let assignee = requireAsPlace(lowerExpr(expr.target));
 
-                            const value = asValue(lowerExpr(expr.value), typeck.exprTys.get(expr.value)!);
+                            const value = asValue(lowerExpr(expr.value), exprTy(expr.value));
                             block.stmts.push({
                                 type: 'Assignment',
                                 assignee,
@@ -357,11 +359,11 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             //   _val = *_place
                             //   _res = _val + 2
                             //   *_place = _res
-                            const rhsTy = typeck.exprTys.get(expr.value)!;
+                            const rhsTy = exprTy(expr.value);
                             const val = asValue(lowerExpr(expr.value), rhsTy);
                             const target = lowerExpr(expr.target);
                             const targetPlace = requireAsPlace(target);
-                            const targetVal = asValue(target, typeck.exprTys.get(expr.target)!);
+                            const targetVal = asValue(target, exprTy(expr.target));
                             const binOpRes = addLocal(rhsTy, true);
 
                             let op: BinaryOp;
@@ -447,7 +449,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     }
                     const res = addLocal(sig.ret, true);
 
-                    const callArgs = expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!));
+                    const callArgs = expr.args.map(v => asValue(lowerExpr(v), exprTy(v)));
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
@@ -467,39 +469,39 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 case 'Index': {
                     const target = requireAsPlace(lowerExpr(expr.target));
-                    const index = asValue(lowerExpr(expr.index), typeck.exprTys.get(expr.index)!);
+                    const index = asValue(lowerExpr(expr.index), exprTy(expr.index));
                     target.projections.push({ type: 'Index', index });
                     return target;
                 }
                 case 'ArrayLiteral':
                 case 'ArrayRepeat': {
-                    const exprTy = typeck.exprTys.get(expr)!;
-                    if (exprTy.type !== 'Array') {
+                    const ty = exprTy(expr);
+                    if (ty.type !== 'Array') {
                         bug(expr.span, 'array literal did not produce array type');
                     }
 
-                    const assignee = addLocal(exprTy, true);
+                    const assignee = addLocal(ty, true);
                     if (expr.type === 'ArrayLiteral') {
                         block.stmts.push({
                             assignee,
                             type: 'InitArrayLit',
-                            ty: exprTy,
-                            values: expr.elements.map(e => asValue(lowerExpr(e), typeck.exprTys.get(e)!))
+                            ty,
+                            values: expr.elements.map(e => asValue(lowerExpr(e), exprTy(e)))
                         });
                     } else {
                         block.stmts.push({
                             assignee,
                             type: 'InitArrayRepeat',
-                            ty: exprTy,
+                            ty,
                             count: expr.count,
-                            value: asValue(lowerExpr(expr.element), typeck.exprTys.get(expr.element)!)
+                            value: asValue(lowerExpr(expr.element), exprTy(expr.element))
                         });
                     }
                     return { type: 'Local', value: assignee };
                 }
                 case 'Record': {
                     const fields: RecordFields<MirValue> = expr.fields.map(([key, expr]) => {
-                        return [key, asValue(lowerExpr(expr), typeck.exprTys.get(expr)!)];
+                        return [key, asValue(lowerExpr(expr), exprTy(expr))];
                     });
                     return {
                         type: 'Record',
@@ -512,7 +514,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const thenBlock = addBlock();
                     const elseBlock = expr.else ? addBlock() : null;
                     const joinedBlock = addBlock();
-                    const ty = typeck.exprTys.get(expr)!;
+                    const ty = exprTy(expr);
                     const res: MirPlace | null = expr.then.tailExpr ? { base: addLocal(ty, false), projections: [] } : null;
                     block.terminator = { type: 'Conditional', then: thenBlock, else: elseBlock ?? joinedBlock, condition };
 
@@ -582,7 +584,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 case 'Tuple': {
                     const elements: MirValue[] = expr.elements.map(expr => {
-                        return asValue(lowerExpr(expr), typeck.exprTys.get(expr)!);
+                        return asValue(lowerExpr(expr), exprTy(expr));
                     });
                     return { type: 'Tuple', value: elements };
                 }
@@ -645,11 +647,11 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     // In body branches, we begin by extracting bindings out of patterns and then execute normal code. At the end, we always jump to a joined block.
                     const bodyBranches = expr.arms.map(() => addBlock());
                     const joinBlock = addBlock();
-                    const matchTy = typeck.exprTys.get(expr)!;
+                    const matchTy = exprTy(expr);
                     const resPlace: MirPlace | null = isUnit(matchTy) ? null : { base: addLocal(matchTy, false), projections: [] };
 
                     const scrutinee = lowerExpr(expr.scrutinee);
-                    const scrutineeTy = typeck.exprTys.get(expr.scrutinee)!;
+                    const scrutineeTy = exprTy(expr.scrutinee);
                     block.terminator = {
                         type: 'Jump',
                         target: checkBranches[0]
@@ -735,7 +737,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                 break;
                             }
                         }
-                        const bodyValue = asValue(lowerExpr(arm.body), typeck.exprTys.get(arm.body)!);
+                        const bodyValue = asValue(lowerExpr(arm.body), exprTy(arm.body));
                         if (resPlace) {
                             block.stmts.push({
                                 type: 'Assignment',
@@ -767,19 +769,19 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     if (expr.deref) {
                         const recvPlace = requireAsPlace(lowerExpr(expr.target));
                         recvPlace.projections.push({ type: 'Deref' });
-                        const ptrTy = typeck.exprTys.get(expr.target)!;
+                        const ptrTy = exprTy(expr.target);
                         if (ptrTy.type !== 'Pointer') {
                             bug(expr.span, 'method call deref must be a pointer');
                         }
                         receiver = asValue(recvPlace, ptrTy.pointee);
                     } else {
-                        receiver = asValue(lowerExpr(expr.target), typeck.exprTys.get(expr.target)!);
+                        receiver = asValue(lowerExpr(expr.target), exprTy(expr.target));
                     }
                     const method = typeck.selectedMethods.get(expr)!;
 
                     const res = addLocal(sig.ret, true);
 
-                    const callArgs = [receiver, ...expr.args.map(v => asValue(lowerExpr(v), typeck.exprTys.get(v)!))];
+                    const callArgs = [receiver, ...expr.args.map(v => asValue(lowerExpr(v), exprTy(v)))];
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
@@ -791,6 +793,27 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 default: assertUnreachable(expr);
             }
+        }
+
+        // Essentially the same as lowerExprInner but also applies any coercions
+        function lowerExpr(expr: Expr): LowerExprResult {
+            const res = lowerExprInner(expr);
+
+            const coercions = typeck.coercions.get(expr);
+            if (coercions) {
+                for (const coercion of coercions) {
+                    switch (coercion.type) {
+                        case 'Autoref': {
+                            const place = requireAsPlace(res);
+                            const borrowLocal = addLocal(coercion.to, true);
+                            block.stmts.push({ type: 'AddrOf', assignee: borrowLocal, place });
+                            return { type: 'Local', value: borrowLocal };
+                        }
+                    }
+                }
+            }
+
+            return res;
         }
 
         for (const stmt of decl.body.stmts) {

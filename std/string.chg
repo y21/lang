@@ -27,7 +27,7 @@ impl String {
     }
 
     fn len(self*): u64 {
-        return (*self).len;
+        return self*.len;
     }
 
     fn push_byte(self*, b: u8) {

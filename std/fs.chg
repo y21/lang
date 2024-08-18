@@ -24,7 +24,7 @@ fn read_to_string(path: str*): String {
 
         let i = 0;
         while i < bytes_read {
-            (&contents).push_byte(buf[ext(i)]);
+            contents.push_byte(buf[ext(i)]);
             i += 1;
         }
     }

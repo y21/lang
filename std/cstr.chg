@@ -11,10 +11,10 @@ impl CString {
     let data = Vec::new();
 
     while i < repr.len {
-      (&data).push(*ptr::add(ptr::cast::<u8, i8>(repr.ptr), i));
+      data.push(*ptr::add(ptr::cast::<u8, i8>(repr.ptr), i));
       i += 1;
     }
-    (&data).push(0);
+    data.push(0);
 
     return data;
   }

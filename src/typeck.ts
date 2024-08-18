@@ -10,7 +10,8 @@ import { visitInStmt } from "./visit";
 import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock';
+type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock'
+    | { type: 'MethodCallReceiver', expr: Expr };
 type Constraint = { cause: ConstraintCause, at: Span, depth: number } & ConstraintType;
 const MAX_CONSTRAINT_DEPTH = 200;
 
@@ -27,8 +28,23 @@ export type TypeckResults = {
     patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
     selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem>,
     hadErrors: boolean,
+    coercions: Map<Expr, Coercion[]>,
     impls: LateImpls
 };
+
+// Gets the **coerced** type of an expression. This is pretty much almost always what you want (over only looking into exprTys).
+export function exprTy(typeck: TypeckResults, expr: Expr) {
+    let ty: Ty = typeck.exprTys.get(expr) || bug(expr.span, 'no type recorded for expression');
+
+    let coercions: Coercion[] | undefined;
+    if (coercions = typeck.coercions.get(expr)) {
+        for (const coercion of coercions) {
+            ty = coercion.to;
+        }
+    }
+
+    return ty;
+}
 
 export type InstantiatedFnSig = {
     parameters: Ty[],
@@ -145,6 +161,11 @@ export function returnTy(sig: AstFnSignature, typeck: TypeckResults): Ty {
     return sig.ret ? typeck.loweredTys.get(sig.ret)! : UNIT;
 }
 
+export type Coercion = {
+    type: 'Autoref',
+    to: Ty
+};
+
 export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResults {
     const infcx = new Infcx();
     const loweredTys = new Map<AstTy, Ty>();
@@ -152,6 +173,11 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
     // TODO: move away from LetDecl | FnParam, once LetDecl | FnParam is implemented in terms of patterns
     const patTys: Map<LetDecl | FnParameter | BindingPat, Ty> = new Map();
     const selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem> = new Map();
+    const coercions: Map<Expr, Coercion[]> = new Map();
+    const addCoercion = (expr: Expr, coercion: Coercion) => {
+        if (coercions.has(expr)) coercions.get(expr)!.push(coercion);
+        coercions.set(expr, [coercion]);
+    }
 
     const lateImpls: LateImpls = res.impls.map(([ty, impl]) => [lowerTy(ty), impl]);
 
@@ -748,7 +774,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         err(expr.span, `argument length mismatch (${expr.args.length} != ${sig.parameters.length - 1})`);
                     }
 
-                    infcx.sub('FnArgument', expr.target.span, targetTy, sig.parameters[0]);
+                    infcx.sub({ type: 'MethodCallReceiver', expr: expr.target }, expr.target.span, targetTy, sig.parameters[0]);
                     for (let i = 0; i < sig.parameters.length - 1; i++) {
                         // Relate our args with the instantiated signature.
                         infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i + 1]);
@@ -906,9 +932,13 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                                 // Both related types are type variables, can't progress; delay them
                                 infcx.tyVars[sub.id].delayedConstraints.push(constraint);
                                 infcx.tyVars[sup.id].delayedConstraints.push(constraint);
-                            }
-                            else if (sub.type === 'never') {
+                            } else if (sub.type === 'never') {
                                 // OK. Never is a subtype of all types.
+                            } else if (sup.type === 'Pointer' && sub.type !== 'Pointer' && typeof constraint.cause === 'object' && constraint.cause.type === 'MethodCallReceiver') {
+                                // `T* == T` in a method call receiver: try to autoref
+                                const coercedTy: Ty = { type: 'Pointer', pointee: sub, flags: sub.flags, mtb: sup.mtb };
+                                addCoercion(constraint.cause.expr, { type: 'Autoref', to: coercedTy });
+                                infcx.nestedSub(constraint, sup, coercedTy);
                             } else {
                                 // Error case.
 
@@ -1067,6 +1097,13 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
             const instantiated = instantiateTyVars(ty);
             infcx.exprTys.set(expr, instantiated);
         }
+
+        let exprCoercions = coercions.get(expr);
+        if (exprCoercions) {
+            for (const coercion of exprCoercions) {
+                coercion.to = instantiateTyVars(coercion.to);
+            }
+        }
     }
 
     function writebackStmt(stmt: Stmt) {
@@ -1085,5 +1122,15 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
         for (const stmt of ast.stmts) visitInStmt(stmt, writebackExpr, writebackStmt);
     }
 
-    return { infcx, loweredTys, exprTys: infcx.exprTys, instantiatedFnSigs, patTys, selectedMethods: selectedMethods, hadErrors: lub.hadErrors, impls: lateImpls };
+    return {
+        infcx,
+        loweredTys,
+        exprTys: infcx.exprTys,
+        instantiatedFnSigs,
+        patTys,
+        selectedMethods: selectedMethods,
+        hadErrors: lub.hadErrors,
+        impls: lateImpls,
+        coercions
+    };
 }

@@ -12,5 +12,8 @@ fn main(): i32 {
   V::<i32>::foo(&v);
   V::foo(&v);
   v.bar(42);
+  (&v).foo();
+  // autoref
+  v.foo();
   return *(&v).foo();
 }
