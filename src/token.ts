@@ -50,6 +50,7 @@ export enum TokenType {
     StarDot,
     Slash,
     Percent,
+    Hash,
     DotDot,
     Dot,
     Lt,

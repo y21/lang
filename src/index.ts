@@ -26,7 +26,8 @@ function timed<T>(what: string, f: () => T): T {
     const sm = createSourceMap();
     const rootFile = addFileToSourceMap(sm, path.resolve(options.path), true);
     try {
-        const ast = timed('parse', () => parse(sm, rootFile));
+        const attrs = new Map();
+        const ast = timed('parse', () => parse(sm, attrs, rootFile));
         const resolutions = timed('name res', () => computeResolutions(ast));
         // TODO: stop passing sm.source everywhere and properly hide it behind the sourcemap
         const tyres = timed('typeck', () => typeck(sm, ast, resolutions));

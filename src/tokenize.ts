@@ -27,6 +27,7 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                 break;
             case '(': tokens.push({ span: [start, i + 1], ty: TokenType.LParen }); break;
             case '_': tokens.push({ span: [start, i + 1], ty: TokenType.Underscore }); break;
+            case '#': tokens.push({ span: [start, i + 1], ty: TokenType.Hash }); break;
             case ')': tokens.push({ span: [start, i + 1], ty: TokenType.RParen }); break;
             case '[': tokens.push({ span: [start, i + 1], ty: TokenType.LSquare }); break;
             case ']': tokens.push({ span: [start, i + 1], ty: TokenType.RSquare }); break;
@@ -191,7 +192,7 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                     i--;
                     tokens.push({ span, ty: TokenType.Number });
                 } else {
-                    err([i, i + 1], 'Unknown token: ' + src[i]);
+                    err([i, i + 1], 'unknown token: ' + src[i]);
                 }
         }
     }

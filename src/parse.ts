@@ -145,6 +145,13 @@ export type LeftToRight = 'ltr';
 export type RightToLeft = 'rtl';
 export type Associativity = LeftToRight | RightToLeft;
 
+
+// #[key (= value)?]
+export type Attribute = {
+    key: string,
+    value?: Expr
+};
+
 export type Pat = { span: Span } & (
     | { type: 'Number', value: number }
     | { type: 'String', value: string }
@@ -253,10 +260,15 @@ enum ParseContext {
     Subexpression
 }
 
-export function parse(sm: SourceMap, file: File): Module {
+export type AttrMap = Map<Stmt, Attribute[]>;
+
+export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
     const tokens = tokenize(sm, file);
     const stmts: Stmt[] = [];
     let i = 0;
+    // When parsing the `#[path]` attribute, assign its value to this variable so it can be accessed in `parseStmt`
+    // so that `mod` parsing can access it
+    let currentPathAttr: string | null = null;
 
     function snip(span: Span) {
         return sm.source.substring(span[0], span[1]);
@@ -280,6 +292,23 @@ export function parse(sm: SourceMap, file: File): Module {
         } else {
             return false;
         }
+    }
+
+    function parseAttributes(): Attribute[] {
+        const attrs: Attribute[] = [];
+
+        while (eatToken(TokenType.Hash, false)) {
+            eatToken(TokenType.LSquare);
+            const key = expectIdent();
+            let value: Expr | undefined = undefined;
+            if (eatToken(TokenType.Assign, false)) {
+                value = parseRootStmtExpr();
+            }
+            attrs.push({ key, value });
+            eatToken(TokenType.RSquare);
+        }
+
+        return attrs;
     }
 
     function parseRootPat(): Pat {
@@ -1007,14 +1036,16 @@ export function parse(sm: SourceMap, file: File): Module {
                     eatToken(TokenType.Semi);
 
                     let normPath: string;
-                    if (file.isRoot) {
+                    if (currentPathAttr) {
+                        normPath = path.join(path.dirname(file.path), currentPathAttr);
+                    } else if (file.isRoot) {
                         normPath = path.join(path.dirname(file.path), name + '.chg');
                     } else {
-                        normPath = path.join(path.resolve(path.basename(file.path, '.chg')), name + '.chg');
+                        normPath = path.join(path.dirname(file.path), path.basename(file.path, '.chg'), name + '.chg');
                     }
 
                     const modFile = addFileToSourceMap(sm, normPath, false);
-                    const { stmts } = parse(sm, modFile);
+                    const { stmts } = parse(sm, attrs, modFile);
                     return {
                         type: 'Mod',
                         modType: 'Outlined',
@@ -1111,10 +1142,22 @@ export function parse(sm: SourceMap, file: File): Module {
     }
 
     function parseStmt(): Stmt {
+        const attrStartSpan = tokens[i].span;
+        const stmtAttrs = parseAttributes();
+        const attrStartEnd = tokens[i].span;
+        let pathAttr: Attribute | undefined;
+        if (pathAttr = stmtAttrs.find(attr => attr.key === 'path')) {
+            if (!pathAttr.value || pathAttr.value.type !== 'String') {
+                err(joinSpan(attrStartSpan, attrStartEnd), '#[path] attr value must be a string');
+            }
+            currentPathAttr = pathAttr.value.value;
+        }
+
         const stmt = parseStmtOrTailExpr();
         if (stmt.type === 'TailExpr') {
             err(stmt.value.span, 'no trailing expression expected');
         } else {
+            attrs.set(stmt, stmtAttrs);
             return stmt;
         }
     }
