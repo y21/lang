@@ -16,3 +16,6 @@ jobs:
               run: node dist/ui
             - name: Build std
               run: echo 'mod std; fn main() {}' > main.chg && node . main.chg
+            - name: Build stage1 compiler
+              working-directory: self
+              run: node .. main.chg

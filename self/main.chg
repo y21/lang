@@ -1,0 +1,4 @@
+#[path = "../std.chg"]
+mod std;
+
+fn main() {}
