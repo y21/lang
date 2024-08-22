@@ -1,6 +1,6 @@
-import { spanless_bug } from "./error";
+import { bug, spanless_bug } from "./error";
 import { FnDecl } from "./parse";
-import { ItemPathMap, Resolutions } from "./resolve";
+import { Resolutions } from "./resolve";
 import { instantiateTy, Ty } from "./ty";
 import { assertUnreachable, assert } from "./util";
 
@@ -10,7 +10,7 @@ function pathToLlvmSymbol(s: string): string {
         .replaceAll('}', '$RB');
 }
 
-export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
+export function mangleTy(ty: Ty): string {
     switch (ty.type) {
         case 'never':
         case 'str':
@@ -19,7 +19,7 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
         case 'int':
             return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'Array':
-            return `$array$${ty.len}$${mangleTy(itemPathMap, ty.elemTy)}`;
+            return `$array$${ty.len}$${mangleTy(ty.elemTy)}`;
         case 'TyParam':
         case 'TyVid':
         case 'FnDef':
@@ -27,14 +27,14 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
         case 'TraitFn':
             spanless_bug(`attempted to mangle ${ty.type}`);
         case 'Pointer':
-            return `$ptr$${ty.mtb}$${mangleTy(itemPathMap, ty.pointee)}`;
+            return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
         case 'Alias': {
-            let out = mangleTy(itemPathMap, instantiateTy(ty.alias, ty.args));
+            let out = mangleTy(instantiateTy(ty.alias, ty.args));
             if (ty.args.length > 0) {
                 out += '$LT$';
                 for (let i = 0; i < ty.args.length; i++) {
                     if (i !== 0) out += '$$';
-                    out += mangleTy(itemPathMap, ty.args[i]);
+                    out += mangleTy(ty.args[i]);
                 }
                 out += '$RT$';
             }
@@ -43,7 +43,7 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
         case 'Record': {
             let out = '$LB$';
             for (const [k, v] of ty.fields) {
-                out += k + '$$' + mangleTy(itemPathMap, v);
+                out += k + '$$' + mangleTy(v);
             }
             out += '$RB$';
             return out;
@@ -52,7 +52,7 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
             let out = '$LP$';
             for (let i = 0; i < ty.elements.length; i++) {
                 if (i !== 0) out += '$$';
-                out += mangleTy(itemPathMap, ty.elements[i]);
+                out += mangleTy(ty.elements[i]);
             }
             out += '$RP$';
             return out;
@@ -64,7 +64,9 @@ export function mangleTy(itemPathMap: ItemPathMap, ty: Ty): string {
 export function mangleInstFn(res: Resolutions, decl: FnDecl, args: Ty[]): string {
     if (res.entrypoint === decl) return 'main';
 
-    let mangled = pathToLlvmSymbol(res.itemUniquePathsForCodegen.get(decl)!);
+    let mangled = pathToLlvmSymbol(
+        res.itemUniquePathsForCodegen.get(decl) || bug(decl.body.span, 'no codegen item path for this fn')
+    );
 
     assert(
         (decl.parent?.generics.length ?? 0) +
@@ -77,7 +79,7 @@ export function mangleInstFn(res: Resolutions, decl: FnDecl, args: Ty[]): string
             if (i !== 0) {
                 mangled += '$$';
             }
-            mangled += mangleTy(res.itemUniquePathsForCodegen, args[i]);
+            mangled += mangleTy(args[i]);
         }
 
         mangled += '$GT$';

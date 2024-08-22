@@ -2,7 +2,7 @@ import { bug, err } from "./error";
 import { EarlyImpls } from "./impls";
 import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl } from "./parse";
 import { Span } from "./span";
-import { assert, assertUnreachable } from "./util";
+import { assert, assertUnreachable, swapRemove } from "./util";
 
 export enum PrimitiveTy {
     Never,
@@ -80,7 +80,6 @@ type UnresolvedNode = { type: 'Expr', value: Expr }
     | { type: 'Ty', value: AstTy }
     | { type: 'Pat', value: Pat }
     | { type: 'Use', value: { span: Span } & UseDecl, declCanonicalPath: CanonicalPath };
-type Unresolveds = Array<Unresolved>;
 
 export function computeResolutions(ast: Module): Resolutions {
     let currentPath: CanonicalPath = 'root';
@@ -114,22 +113,15 @@ export function computeResolutions(ast: Module): Resolutions {
     }
 
     const valueNs = new Map<CanonicalPath, ValueResolution>();
-    const unresolveds = new Map<string, Unresolveds>();
+    const unresolveds: Unresolved[] = [];
 
     const addToUnresolveds = (ref: UnresolvedNode, path: Path<AstTy>) => {
-        const lastSegment = path.segments[path.segments.length - 1].ident;
-        let items: Unresolveds | undefined;
         const value: Unresolved = {
             fromPath: currentPath,
             path,
             node: ref
         };
-
-        if (items = unresolveds.get(lastSegment)) {
-            items.push(value);
-        } else {
-            unresolveds.set(lastSegment, [value]);
-        }
+        unresolveds.push(value);
     }
 
     const valueResolutions: ValueResolutions = new Map();
@@ -235,39 +227,19 @@ export function computeResolutions(ast: Module): Resolutions {
         No
     }
 
-    function tryEarlyResolveRelativePath<T extends ValueResolution | TypeResolution>(
+    function tryEarlyResolvePath<T extends ValueResolution | TypeResolution>(
+        basePath: string,
         input: Path<AstTy>,
         namespaceMap: Map<CanonicalPath, T>,
         resMod: ResolveModules
     ): [T, string] | undefined {
-        return forEachResolvablePath(currentPath, input, (_, effectivePath) => {
+        return forEachResolvablePath(basePath, input, (_, effectivePath) => {
             let resolved: T | undefined;
             if ((resolved = namespaceMap.get(effectivePath)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
                 return ['break', [resolved, effectivePath]];
             }
             return 'continue';
         });
-    }
-
-    function processLateResolved(
-        path: CanonicalPath,
-        fn: (_: Unresolved) => 'remove' | 'retain'
-    ) {
-        let maybeResolvables: Unresolveds | undefined;
-        const keySegment = lastPathSegment(path);
-        if (maybeResolvables = unresolveds.get(keySegment)) {
-            // Go backwards to avoid index invalidation
-            for (let i = maybeResolvables.length - 1; i >= 0; i--) {
-                const res = maybeResolvables[i];
-
-                if (fn(res) === 'remove') {
-                    maybeResolvables.splice(i, 1);
-                    if (maybeResolvables.length === 0) {
-                        unresolveds.delete(keySegment);
-                    }
-                }
-            }
-        }
     }
 
     // Checks if `to` is a path that is reachable from `from`.
@@ -280,30 +252,36 @@ export function computeResolutions(ast: Module): Resolutions {
         }) === true;
     }
 
-    // You should call this when visiting any kind of item (type or value) that can be "late resolved", i.e.
-    // nodes that can be referenced before its definition.
-    // This tries to find unresolveds that can be resolved with this definition
-    function lateResolveforItemDefinition<K, V extends ValueResolution | TypeResolution>(
-        path: CanonicalPath,
-        resMap: Map<K, V>,
-        item: V
-    ) {
-        itemUniquePathsForCodegen.set(item, path);
-        processLateResolved(path, (unres) => {
-            // the usage path (unres) is somewhere in a nested scope.
-            // we walk *up* until we find a path that is in the resmap
-            if (isPathReachableFrom(path, unres.fromPath, unres.path)) {
-                if (unres.node.type === 'Use') {
-                    useResolutions.set(unres.node.declCanonicalPath, path);
-                    lateResolveforItemDefinition(unres.node.declCanonicalPath, resMap, item);
-                } else {
-                    resMap.set(unres.node.value as K, item);
-                }
-                return 'remove';
+    function pathPatternCouldResolveTo(base: string, path: Path<AstTy>): PatResolution | undefined {
+        return forEachResolvablePath(base, path, (_, effectivePath) => {
+            const res = valueNs.get(effectivePath);
+            if (res?.type === 'Variant') {
+                return ['break', res as PatResolution];
             }
-
-            return 'retain';
+            return 'continue';
         });
+    }
+
+    function resolveUse(node: { type: 'Use' } & UnresolvedNode, base: string, path: Path<AstTy>): boolean {
+        const resolveInNs = <K, T extends TypeResolution | ValueResolution>(resMap: Map<K, T>, ns: Map<string, T>): boolean => {
+            let res: [T, string] | undefined;
+            if (res = tryEarlyResolvePath(base, path, ns, ResolveModules.Yes)) {
+                ns.set(node.declCanonicalPath, res[0]);
+                // FIXME: a use can resolve to multiple things!
+                useResolutions.set(node.declCanonicalPath, res[1]);
+                return true;
+            } else {
+                return false;
+            }
+        };
+        const resolvedAsValue = resolveInNs(valueResolutions, valueNs);
+        const resolvedAsType = resolveInNs(tyResolutions, typeNs);
+        if (!resolvedAsValue && !resolvedAsType) {
+            // Can it get early-resolved as a type and late-resolved as a value..?
+            addToUnresolveds(node, path);
+            return false;
+        }
+        return true;
     }
 
     function visitPat(pat: Pat) {
@@ -315,13 +293,7 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'String':
                 break;
             case 'Path': {
-                const ret = forEachResolvablePath(currentPath, pat.path, (_, effectivePath) => {
-                    const res = valueNs.get(effectivePath);
-                    if (res?.type === 'Variant') {
-                        return ['break', res as PatResolution];
-                    }
-                    return 'continue';
-                });
+                const ret = pathPatternCouldResolveTo(currentPath, pat.path);
 
                 if (ret) {
                     patResolutions.set(pat, ret);
@@ -355,12 +327,10 @@ export function computeResolutions(ast: Module): Resolutions {
                     err(ty.span, 'enum types can currently only appear in type aliases');
                 }
                 withTyAliasScoped(ty.name, () => {
-                    lateResolveforItemDefinition(currentPath, tyResolutions, ty);
                     typeNs.set(currentPath, ty);
                     for (let i = 0; i < ty.variants.length; i++) {
                         withNamedScope(ty.variants[i].name, () => {
                             const res: VariantResolution = { type: 'Variant', enum: ty, variant: i };
-                            lateResolveforItemDefinition(currentPath, valueResolutions, res);
                             valueNs.set(currentPath, res);
                         });
                     }
@@ -476,7 +446,7 @@ export function computeResolutions(ast: Module): Resolutions {
         T extends TypeResolution | ValueResolution,
     >(path: Path<AstTy>, ref: U, ns: Map<string, T>, resMap: Map<K, T>) {
         let res: [T, string] | undefined;
-        if (res = tryEarlyResolveRelativePath(path, ns, ResolveModules.No)) {
+        if (res = tryEarlyResolvePath(currentPath, path, ns, ResolveModules.No)) {
             resMap.set(ref.value, res[0]);
         } else {
             addToUnresolveds(ref, path);
@@ -510,7 +480,8 @@ export function computeResolutions(ast: Module): Resolutions {
 
     function visitFnDecl(decl: FnDecl, impl?: Impl) {
         withNamedScope(decl.sig.name, () => {
-            lateResolveforItemDefinition(currentPath, valueResolutions, decl);
+            itemUniquePathsForCodegen.set(decl, currentPath);
+
             valueNs.set(currentPath, decl);
             let parentGenericsCount: number;
             if (impl) {
@@ -582,7 +553,6 @@ export function computeResolutions(ast: Module): Resolutions {
                 withNamedScope(stmt.name, () => {
                     if (stmt.alias.type !== 'Enum') {
                         // We only register a resolution to the type alias 
-                        lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
                         typeNs.set(currentPath, stmt);
                     }
                     for (let i = 0; i < stmt.generics.length; i++) {
@@ -597,7 +567,6 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'Mod': {
                 withNamedScope(stmt.name, () => {
                     typeNs.set(currentPath, stmt);
-                    lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
                     for (const item of (stmt as Mod).items) {
                         visitStmt(item);
                     }
@@ -639,7 +608,6 @@ export function computeResolutions(ast: Module): Resolutions {
             }
             case 'Trait':
                 withNamedScope(stmt.name, () => {
-                    lateResolveforItemDefinition(currentPath, tyResolutions, stmt);
                     typeNs.set(currentPath, stmt);
                     typeNs.set(`${currentPath}::Self`, { type: 'TyParam', id: 0, parentItem: stmt });
                     // TODO: once traits can have generics, add generics here and pass the right parentGenericsCount
@@ -654,21 +622,7 @@ export function computeResolutions(ast: Module): Resolutions {
                 break;
             case 'Use': {
                 withNamedScope(stmt.alias || stmt.path.segments[stmt.path.segments.length - 1].ident, () => {
-                    const resolveInNs = <K, T extends TypeResolution | ValueResolution>(resMap: Map<K, T>, ns: Map<string, T>): boolean => {
-                        let res: [T, string] | undefined;
-                        if (res = tryEarlyResolveRelativePath(stmt.path, ns, ResolveModules.Yes)) {
-                            ns.set(currentPath, res[0]);
-                            useResolutions.set(currentPath, res[1]);
-                            lateResolveforItemDefinition(currentPath, resMap, res[0]);
-                            return true;
-                        } else {
-                            return false;
-                        }
-                    };
-
-                    if (!resolveInNs(valueResolutions, valueNs) && !resolveInNs(tyResolutions, typeNs)) {
-                        addToUnresolveds({ type: 'Use', value: stmt, declCanonicalPath: currentPath }, stmt.path);
-                    }
+                    resolveUse({ type: 'Use', value: stmt, declCanonicalPath: currentPath }, currentPath, stmt.path);
                 });
                 break;
             }
@@ -683,46 +637,74 @@ export function computeResolutions(ast: Module): Resolutions {
         }
         visitStmt(stmt);
     }
-    if (!entrypoint) {
-        err([0, 0], "'main' function not found");
-    }
 
-    for (const [, resolve] of unresolveds) {
-        for (const { fromPath, node, path } of resolve) {
-            const canonicalPath = `${fromPath}::${path.segments.map(s => s.ident).join('::')}`;
-            if (node.type === 'Pat') {
-                const bindingPat: BindingPat = { type: 'Binding' };
+    let progressed = true;
+    while (progressed) {
+        progressed = false;
 
-                patResolutions.set(node.value, bindingPat);
-                processLateResolved(canonicalPath, (unres) => {
-                    if (unres.node.value === node.value) {
-                        return 'remove';
+        // Reorder all unresolved patterns to be at the start so that enum variants have priority and have a chance before we fallback to creatin a binding
+        unresolveds.sort((a, b) => a.node.type === 'Pat' ? -1 : 0);
+
+        for (let i = unresolveds.length - 1; i >= 0; i--) {
+            const unresolved = swapRemove(unresolveds, i);
+
+            switch (unresolved.node.type) {
+                case 'Expr': {
+                    let res: [ValueResolution, string] | undefined;
+                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.path, valueNs, ResolveModules.No)) {
+                        progressed = true;
+                        valueResolutions.set(unresolved.node.value, res[0]);
+                    } else {
+                        unresolveds.push(unresolved);
                     }
-
-                    if (isPathReachableFrom(canonicalPath, unres.fromPath, unres.path)) {
-                        if (unres.node.type !== 'Expr') {
-                            err(unres.node.value.span, 'reference to binding pattern must be an expression node');
-                        }
-
-                        valueResolutions.set(unres.node.value, bindingPat);
-                        return 'remove';
+                    break;
+                }
+                case 'Pat': {
+                    let res: PatResolution | undefined;
+                    if (res = pathPatternCouldResolveTo(unresolved.fromPath, unresolved.path)) {
+                        progressed = true;
+                        patResolutions.set(unresolved.node.value, res);
+                    } else {
+                        const binding: BindingPat = { type: 'Binding' };
+                        patResolutions.set(unresolved.node.value, binding);
+                        valueNs.set(`${unresolved.fromPath}::${unresolved.path.segments.map(s => s.ident).join('::')}`, binding);
+                        // We can now potentially progress more path exprs that refer to this binding pat.
+                        progressed = true;
                     }
-
-                    return 'retain';
-                });
+                    break;
+                }
+                case 'Ty': {
+                    let res: [TypeResolution, string] | undefined;
+                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.path, typeNs, ResolveModules.No)) {
+                        progressed = true;
+                        tyResolutions.set(unresolved.node.value, res[0]);
+                    } else {
+                        unresolveds.push(unresolved);
+                    }
+                    break;
+                }
+                case 'Use': {
+                    if (resolveUse(unresolved.node, unresolved.fromPath, unresolved.path)) {
+                        progressed = true;
+                    }
+                    // (note: resolveUse automatically adds back to unresolveds if needed)
+                    break;
+                }
             }
         }
     }
 
     // Go through the unresolveds one last time to report errors.
-    for (const [, unres] of unresolveds) {
-        for (const { fromPath, path, node } of unres) {
-            console.error(`${fromPath}::${path.segments.map(s => s.ident).join('::')} cannot be resolved`);
-        }
+    for (const { fromPath, path } of unresolveds) {
+        console.error(`${fromPath}::${path.segments.map(s => s.ident).join('::')} cannot be resolved`);
     }
 
-    if (unresolveds.size != 0) {
+    if (unresolveds.length != 0) {
         throw 'cannot continue due to name resolution errors';
+    }
+
+    if (!entrypoint) {
+        err([0, 0], "'main' function not found");
     }
 
     return {

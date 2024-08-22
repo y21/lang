@@ -6,7 +6,22 @@ mod foo {
 }
 use foo::bar;
 use foo::nested;
+
+use nested2::X;
+
+fn foo2() {
+    X::foo();
+}
+
+mod nested2 {
+    type X = {};
+    impl X {
+        fn foo() {}
+    }
+}
+
 fn main(): i32 {
     nested::baz();
+    foo2();
     return bar();
 }

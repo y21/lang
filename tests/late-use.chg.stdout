@@ -17,7 +17,7 @@ expr @ 13:11 22:0 => ()
 
 
 
-define void @root$f6() {
+define void @root$x() {
 prologue:
 br label %bb.0
 
@@ -31,31 +31,31 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.0 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.0 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.1
 
 bb.1:
-%l.1 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.1 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.2
 
 bb.2:
-%l.2 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.2 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.3
 
 bb.3:
-%l.3 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.3 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.4
 
 bb.4:
-%l.4 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.4 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.5
 
 bb.5:
-%l.5 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.5 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.6
 
 bb.6:
-%l.6 = call {} bitcast(void()* @root$f6 to {}()*)()
+%l.6 = call {} bitcast(void()* @root$x to {}()*)()
 br label %bb.7
 
 bb.7:
