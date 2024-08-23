@@ -1,11 +1,11 @@
 import { options } from "./cli";
-import { fnInLateImpl, LateImpls } from "./impls";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait } from "./parse";
-import { Resolutions, PrimitiveTy, BindingPat } from "./resolve";
+import { itemInLateImpl, LateImpls } from "./impls";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait, Path, GenericArg } from "./parse";
+import { Resolutions, PrimitiveTy, BindingPat, TypeResolution } from "./resolve";
 import { SourceMap, Span, ppSpan, shrinkToHi } from "./span";
 import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, eqTy, TyParamCheck, genericArgsOfTy } from "./ty";
-import { assert, assertUnreachable, swapRemove, todo } from "./util";
+import { assert, assertUnreachable, inspect, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
@@ -26,6 +26,7 @@ export type TypeckResults = {
     instantiatedFnSigs: Map<Expr, InstantiatedFnSig>,
     exprTys: Map<Expr, Ty>,
     patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
+    typeRelativeResolutions: Map<TypeResolution, ImplItem>,
     selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem>,
     hadErrors: boolean,
     coercions: Map<Expr, Coercion[]>,
@@ -178,8 +179,50 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
         if (coercions.has(expr)) coercions.get(expr)!.push(coercion);
         coercions.set(expr, [coercion]);
     }
+    const typeRelativeResolutions: Map<TypeResolution, ImplItem> = new Map();
 
-    const lateImpls: LateImpls = res.impls.map(([ty, impl]) => [lowerTy(ty), impl]);
+    const lateImpls: LateImpls = res.impls.map(([ty, impl]) => {
+        return [lowerTy(ty), impl]
+    });
+
+    function lowerTyResolution(res: TypeResolution, span: Span, genericArgs: GenericArg<AstTy>[]): Ty {
+        switch (res.type) {
+            case 'TyParam': return { type: 'TyParam', flags: TYPARAM_MASK, id: res.id, parentItem: res.parentItem };
+            case 'Primitive': switch (res.kind) {
+                case PrimitiveTy.Never: return { type: 'never', flags: EMPTY_FLAGS };
+                case PrimitiveTy.I8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
+                case PrimitiveTy.I16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
+                case PrimitiveTy.I32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
+                case PrimitiveTy.I64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
+                case PrimitiveTy.U8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
+                case PrimitiveTy.U16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
+                case PrimitiveTy.U32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
+                case PrimitiveTy.U64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
+                case PrimitiveTy.Bool: return BOOL;
+                case PrimitiveTy.Str: return { type: 'str', flags: EMPTY_FLAGS };
+                default: assertUnreachable(res.kind)
+            }
+            case 'TyAlias':
+                const args: Ty[] = [];
+                let flags = EMPTY_FLAGS;
+                for (const arg of genericArgs) {
+                    const lowered = lowerTy(arg.ty);
+                    flags |= lowered.flags;
+                    args.push(lowered);
+                }
+                return { type: 'Alias', flags, decl: res, alias: lowerTy(res.alias), args };
+            case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: res };
+            case 'Mod': bug(span, 'cannot lower module as a type');
+            case 'Trait': bug(span, `expected type, got trait ${inspect(res)}`);
+            case 'Self': return lowerTy(res.selfTy);
+            case 'Root': bug(span, 'cannot lower root paths');
+            case 'TypeRelative': {
+                // TODO: once we have associated types, this path will be reachable
+                bug(span, 'there are no type-relative types');
+            }
+            default: assertUnreachable(res)
+        }
+    }
 
     function lowerTy(ty: AstTy): Ty {
         let lowered = loweredTys.get(ty);
@@ -189,38 +232,8 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
             switch (ty.type) {
                 case 'Path': {
                     const tyres = res.tyResolutions.get(ty)!;
-                    switch (tyres.type) {
-                        case 'TyParam': return { type: 'TyParam', flags: TYPARAM_MASK, id: tyres.id, parentItem: tyres.parentItem };
-                        case 'Primitive': switch (tyres.kind) {
-                            case PrimitiveTy.Never: return { type: 'never', flags: EMPTY_FLAGS };
-                            case PrimitiveTy.I8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
-                            case PrimitiveTy.I16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 16 } };
-                            case PrimitiveTy.I32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 32 } };
-                            case PrimitiveTy.I64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 64 } };
-                            case PrimitiveTy.U8: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 8 } };
-                            case PrimitiveTy.U16: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 16 } };
-                            case PrimitiveTy.U32: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 32 } };
-                            case PrimitiveTy.U64: return { type: 'int', flags: EMPTY_FLAGS, value: { signed: false, bits: 64 } };
-                            case PrimitiveTy.Bool: return BOOL;
-                            case PrimitiveTy.Str: return { type: 'str', flags: EMPTY_FLAGS };
-                            default: assertUnreachable(tyres.kind)
-                        }
-                        case 'TyAlias':
-                            const args: Ty[] = [];
-                            let flags = EMPTY_FLAGS;
-                            for (const arg of ty.value.segments[0].args) {
-                                const lowered = lowerTy(arg.ty);
-                                flags |= lowered.flags;
-                                args.push(lowered);
-                            }
-                            return { type: 'Alias', flags, decl: tyres, alias: lowerTy(tyres.alias), args };
-                        case 'Enum': return { type: 'Enum', flags: EMPTY_FLAGS, decl: tyres };
-                        case 'Mod': bug(ty.span, 'cannot lower module as a type');
-                        case 'Trait': bug(ty.span, `expected type, got trait ${ty.value}`);
-                        case 'Self': return lowerTy(tyres.selfTy);
-                        case 'Root': bug(ty.span, 'cannot lower root paths');
-                        default: assertUnreachable(tyres)
-                    }
+                    // TODO: this looks questionable
+                    return lowerTyResolution(tyres, ty.span, ty.value.segments[ty.value.segments.length - 1]?.args);
                 }
                 case 'Array': {
                     const elemTy = lowerTy(ty.elemTy);
@@ -395,6 +408,18 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         case 'Binding': return patTys.get(litres)!;
                         case 'FnParam': return patTys.get(litres.param)!;
                         case 'Variant': return lowerTy(litres.enum);
+                        case 'TypeRelative': {
+                            const ty = lowerTyResolution(litres.ty, expr.span, litres.tyArgs);
+                            if (litres.segments.length != 1) {
+                                bug(expr.span, 'type relative path must have exactly one trailing segment, got: ' + inspect(litres.segments));
+                            }
+                            const item = itemInLateImpl(lateImpls, ty, litres.segments[0].ident);
+                            if (!item) {
+                                bug(expr.span, `item '${litres.segments[0].ident}' not found on type ${ppTy(ty)}`);
+                            }
+                            typeRelativeResolutions.set(litres, item);
+                            return { type: 'FnDef', decl: item.decl, flags: EMPTY_FLAGS };
+                        }
                         default: assertUnreachable(litres);
                     }
                 }
@@ -704,10 +729,15 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     // the pointe_e_ type is exclusively used for method lookup/selection
                     const derefTargetTy = targetTy.type === 'Pointer' ? targetTy.pointee : targetTy;
 
-                    let selectedMethod = fnInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
+                    let selectedMethod = itemInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
+                    const hasReceiver = selectedMethod?.decl.sig.parameters[0]?.type === 'Receiver';
 
-                    if (!selectedMethod) {
-                        err(expr.span, `method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`);
+                    if (!selectedMethod || !hasReceiver) {
+                        err(
+                            expr.span,
+                            `method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`,
+                            !hasReceiver ? 'this function exists on the type but it has no `self` receiver' : undefined
+                        );
                     }
 
                     if (selectedMethod.decl.sig.parameters[0].type !== 'Receiver') {
@@ -1131,6 +1161,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
         selectedMethods: selectedMethods,
         hadErrors: lub.hadErrors,
         impls: lateImpls,
+        typeRelativeResolutions,
         coercions
     };
 }

@@ -26,7 +26,7 @@ ret void
 
 }
 
-define void @root$nested2$X$foo() {
+define void @root$nested2$X$$LB$3$RB$foo() {
 prologue:
 br label %bb.0
 
@@ -40,7 +40,7 @@ prologue:
 br label %bb.0
 
 bb.0:
-%l.0 = call {} bitcast(void()* @root$nested2$X$foo to {}()*)()
+%l.0 = call {} bitcast(void()* @root$nested2$X$$LB$3$RB$foo to {}()*)()
 br label %bb.1
 
 bb.1:

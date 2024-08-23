@@ -247,6 +247,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         }
                         case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
                         case 'Variant': return { type: 'Variant', enum: resolution.enum, variant: resolution.variant };
+                        case 'TypeRelative': {
+                            const res = typeck.typeRelativeResolutions.get(resolution)!;
+                            return {
+                                type: 'FnDef',
+                                value: res.decl
+                            };
+                        }
                         default: assertUnreachable(resolution);
                     }
                 }

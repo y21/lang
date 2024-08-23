@@ -193,7 +193,7 @@ export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
     if (tyc === TyParamCheck.IgnoreAgainst && rty.type === 'TyParam') return true;
 
     if (lty.type === 'Alias' && rty.type === 'Alias') {
-        return lty.decl === rty.decl && eqManyTys(lty.args, rty.args, tyc);
+        return lty.decl === rty.decl && (tyc === TyParamCheck.IgnoreAgainst ? true : eqManyTys(lty.args, rty.args, tyc));
     } else if (lty.type === 'Enum' && rty.type === 'Enum') {
         return lty.decl === rty.decl;
     } else if (lty.type === 'TyParam' && rty.type === 'TyParam') {
@@ -202,6 +202,13 @@ export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
         return eqManyTys(lty.elements, rty.elements, tyc);
     } else if (lty.type === 'int' && rty.type === 'int') {
         return lty.value.bits === rty.value.bits && lty.value.signed === rty.value.signed;
+    } else if (
+        // Trivially true
+        lty.type === 'str' && rty.type === 'str'
+        || lty.type === 'bool' && rty.type === 'bool'
+        || lty.type === 'never' && rty.type === 'never'
+    ) {
+        return true;
     } else {
         return false;
     }

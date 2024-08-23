@@ -1,0 +1,49 @@
+expr @ 3:26 4:0 => ()
+expr @ 4:19 5:0 => ()
+expr @ 9:10 9:14 => fn func(...)
+expr @ 9:10 9:16 => ()
+expr @ 10:5 10:16 => str*
+expr @ 10:5 10:25 => ()
+expr @ 8:11 12:1 => ()
+
+
+@ct.0 = private constant [9 x i8] c"this is a"
+
+define void @root$x$str$$LB$0$RB$func() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @root$x$str$$LB$0$RB$method({i8*, i64} %lt.0) {
+prologue:
+%l.0 = alloca {i8*, i64}
+store {i8*, i64} %lt.0, {i8*, i64}* %l.0
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @main() {
+prologue:
+br label %bb.0
+
+bb.0:
+%l.0 = call {} bitcast(void()* @root$x$str$$LB$0$RB$func to {}()*)()
+br label %bb.1
+
+bb.1:
+%l.1 = call {} bitcast(void({i8*, i64})* @root$x$str$$LB$0$RB$method to {}({i8*, i64})*)({i8*, i64} {i8* bitcast([9 x i8]* @ct.0 to i8*), i64 9})
+br label %bb.2
+
+bb.2:
+ret void
+
+}
+
+

@@ -84,7 +84,7 @@ ret {i32}* %ret.2
 
 }
 
-define void @root$V$by_value({i32} %lt.0) {
+define void @root$V$$LB$0$RB$by_value({i32} %lt.0) {
 prologue:
 %l.0 = alloca {i32}
 store {i32} %lt.0, {i32}* %l.0
@@ -95,7 +95,7 @@ ret void
 
 }
 
-define void @root$V$by_ref({i32}* %lt.0) {
+define void @root$V$$LB$0$RB$by_ref({i32}* %lt.0) {
 prologue:
 %l.0 = alloca {i32}*
 store {i32}* %lt.0, {i32}** %l.0
@@ -165,7 +165,7 @@ br label %bb.2
 bb.2:
 %t.20 = load {i32}*, {i32}** %l.9
 %l.14 = load {i32}, {i32}* %t.20
-%l.15 = call {} bitcast(void({i32})* @root$V$by_value to {}({i32})*)({i32} %l.14)
+%l.15 = call {} bitcast(void({i32})* @root$V$$LB$0$RB$by_value to {}({i32})*)({i32} %l.14)
 br label %bb.3
 
 bb.3:
@@ -178,12 +178,12 @@ bb.4:
 store {i32}* %l.16, {i32}** %t.21
 %t.22 = load {i32}*, {i32}** %t.21
 %l.18 = load {i32}, {i32}* %t.22
-%l.19 = call {} bitcast(void({i32})* @root$V$by_value to {}({i32})*)({i32} %l.18)
+%l.19 = call {} bitcast(void({i32})* @root$V$$LB$0$RB$by_value to {}({i32})*)({i32} %l.18)
 br label %bb.5
 
 bb.5:
 %l.20 = load {i32}*, {i32}** %l.9
-%l.21 = call {} bitcast(void({i32}*)* @root$V$by_ref to {}({i32}*)*)({i32}* %l.20)
+%l.21 = call {} bitcast(void({i32}*)* @root$V$$LB$0$RB$by_ref to {}({i32}*)*)({i32}* %l.20)
 br label %bb.6
 
 bb.6:

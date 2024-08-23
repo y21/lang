@@ -1,6 +1,6 @@
 import { bug, err } from "./error";
 import { EarlyImpls } from "./impls";
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl, GenericArg } from "./parse";
 import { Span } from "./span";
 import { assert, assertUnreachable, swapRemove } from "./util";
 
@@ -46,7 +46,8 @@ export type TypeResolution = TyParamResolution
     | ({ type: 'Enum' } & AstTy)
     | Mod
     | Trait
-    | { type: 'Root' };
+    | { type: 'Root' }
+    | TypeRelativeResolution;
 export type BindingPat = { type: 'Binding' };
 export type PatResolution = VariantResolution | BindingPat;
 export type VariantResolution = { type: 'Variant', enum: { type: 'Enum' } & AstTy, variant: VariantId };
@@ -56,7 +57,15 @@ export type TypeResolutions = Map<AstTy, TypeResolution>;
  * These are incomplete because it relies on inference to fill that self type in.
  */
 export type TraitFn = { parentTrait: Trait, sig: AstFnSignature };
-export type ValueResolution = FnDecl | LetDecl | ExternFnDecl | ({ type: 'FnParam', param: FnParameter }) | VariantResolution | BindingPat | { type: 'TraitFn', value: TraitFn };
+export type TypeRelativeResolution = { type: 'TypeRelative', ty: TypeResolution, tyArgs: GenericArg<AstTy>[], segments: PathSegment<AstTy>[] };
+export type ValueResolution = FnDecl
+    | LetDecl
+    | ExternFnDecl
+    | VariantResolution
+    | BindingPat
+    | { type: 'FnParam', param: FnParameter }
+    | { type: 'TraitFn', value: TraitFn }
+    | TypeRelativeResolution;
 export type ValueResolutions = Map<Expr, ValueResolution>;
 export type PatResolutions = Map<Pat, PatResolution>;
 export type Resolutions = {
@@ -176,11 +185,16 @@ export function computeResolutions(ast: Module): Resolutions {
         withNamedScope(`{${nextScopeId()}}`, fn);
     }
 
-    function forEachResolvablePath<T>(prefix: string, suffix: Path<AstTy>, cb: (visiblePath: string, effectivePath: string) => ('continue' | ['break', T])): T | undefined {
+    type ResolveCallbackData = { type: 'Normal', visiblePath: string, effectivePath: string }
+        | { type: 'TypeRelative', tyEffectivePath: string, remainingSegments: string[], tyGenericArgs: GenericArg<AstTy>[] };
+    type ControlFlow<B> = 'continue' | ['break', B];
+
+    function forEachResolvablePath<T>(prefix: string, suffix: Path<AstTy>, cb: (d: ResolveCallbackData) => ControlFlow<T>): T | undefined {
         let path = prefix;
         while (true) {
             let effectivePath = path;
             let visiblePath = path;
+            let typeRelativeData: null | ({ type: 'TypeRelative' } & ResolveCallbackData) = null;
 
             // Gradually build up the path concatenation of the prefix with all segments of the suffix, one at a time.
             // We might come across a use, which 'redirects' us elsewhere.
@@ -196,11 +210,33 @@ export function computeResolutions(ast: Module): Resolutions {
                 if (useRes = useResolutions.get(effectivePath)) {
                     effectivePath = useRes;
                 }
+
+                let tyRes: TypeResolution | undefined;
+                if ((tyRes = typeNs.get(effectivePath)) && ['Enum', 'Primitive', 'Trait', 'TyAlias'].includes(tyRes.type) && i < suffix.segments.length - 1) {
+                    assert(!typeRelativeData);
+
+                    typeRelativeData = {
+                        type: 'TypeRelative',
+                        tyEffectivePath: effectivePath,
+                        tyGenericArgs: suffix.segments[i].args,
+                        remainingSegments: suffix.segments.slice(i + 1).map(s => s.ident)
+                    };
+                }
             }
 
-            const ret = cb(visiblePath, effectivePath);
+            const ret = cb({ type: 'Normal', visiblePath, effectivePath });
             if (ret !== 'continue') {
                 return ret[1];
+            }
+
+            if (typeRelativeData) {
+                // We want to call the cb with normal paths first so that enum variant constructors get a chance first.
+                // Type relative resolutions is always accepted in name resolution but might fail later in typeck,
+                // so only do it as a last step
+                const ret = cb(typeRelativeData);
+                if (ret !== 'continue') {
+                    return ret[1];
+                }
             }
 
             let modRes: TypeResolution | undefined;
@@ -229,43 +265,64 @@ export function computeResolutions(ast: Module): Resolutions {
 
     function tryEarlyResolvePath<T extends ValueResolution | TypeResolution>(
         basePath: string,
+        span: Span,
         input: Path<AstTy>,
         namespaceMap: Map<CanonicalPath, T>,
         resMod: ResolveModules
     ): [T, string] | undefined {
-        return forEachResolvablePath(basePath, input, (_, effectivePath) => {
-            let resolved: T | undefined;
-            if ((resolved = namespaceMap.get(effectivePath)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
-                return ['break', [resolved, effectivePath]];
+        return forEachResolvablePath(basePath, input, (path) => {
+            if (path.type === 'TypeRelative') {
+                return ['break', [
+                    {
+                        type: 'TypeRelative',
+                        ty: typeNs.get(path.tyEffectivePath)!,
+                        tyArgs: path.tyGenericArgs,
+                        segments: path.remainingSegments.map(ident => ({ ident, args: [] }))
+                    } as TypeRelativeResolution as any as T,
+                    path.tyEffectivePath
+                ]];
+            } else {
+                let resolved: T | undefined;
+                if ((resolved = namespaceMap.get(path.effectivePath)) && (resMod === ResolveModules.Yes || resolved.type !== 'Mod')) {
+                    return ['break', [resolved, path.effectivePath]];
+                }
+                return 'continue';
             }
-            return 'continue';
         });
     }
 
     // Checks if `to` is a path that is reachable from `from`.
     function isPathReachableFrom(to: CanonicalPath, from_prefix: string, from_suffix: Path<AstTy>): boolean {
-        return forEachResolvablePath(from_prefix, from_suffix, (visiblePath) => {
-            if (visiblePath === to) {
-                return ['break', true];
+        return forEachResolvablePath(from_prefix, from_suffix, (path) => {
+            if (path.type === 'TypeRelative') {
+                return 'continue';
+            } else {
+                if (path.visiblePath === to) {
+                    return ['break', true];
+                }
+                return 'continue';
             }
-            return 'continue';
         }) === true;
     }
 
     function pathPatternCouldResolveTo(base: string, path: Path<AstTy>): PatResolution | undefined {
-        return forEachResolvablePath(base, path, (_, effectivePath) => {
-            const res = valueNs.get(effectivePath);
-            if (res?.type === 'Variant') {
-                return ['break', res as PatResolution];
+        return forEachResolvablePath(base, path, (path) => {
+            if (path.type === 'TypeRelative') {
+                return 'continue';
+            } else {
+                const res = valueNs.get(path.effectivePath);
+                if (res?.type === 'Variant') {
+                    return ['break', res as PatResolution];
+                }
+                return 'continue';
             }
-            return 'continue';
         });
     }
 
     function resolveUse(node: { type: 'Use' } & UnresolvedNode, base: string, path: Path<AstTy>): boolean {
         const resolveInNs = <K, T extends TypeResolution | ValueResolution>(resMap: Map<K, T>, ns: Map<string, T>): boolean => {
             let res: [T, string] | undefined;
-            if (res = tryEarlyResolvePath(base, path, ns, ResolveModules.Yes)) {
+            if (res = tryEarlyResolvePath(base, node.value.span, path, ns, ResolveModules.Yes)) {
                 ns.set(node.declCanonicalPath, res[0]);
                 // FIXME: a use can resolve to multiple things!
                 useResolutions.set(node.declCanonicalPath, res[1]);
@@ -446,7 +503,7 @@ export function computeResolutions(ast: Module): Resolutions {
         T extends TypeResolution | ValueResolution,
     >(path: Path<AstTy>, ref: U, ns: Map<string, T>, resMap: Map<K, T>) {
         let res: [T, string] | undefined;
-        if (res = tryEarlyResolvePath(currentPath, path, ns, ResolveModules.No)) {
+        if (res = tryEarlyResolvePath(currentPath, ref.value.span, path, ns, ResolveModules.No)) {
             resMap.set(ref.value, res[0]);
         } else {
             addToUnresolveds(ref, path);
@@ -588,12 +645,18 @@ export function computeResolutions(ast: Module): Resolutions {
                     visitTy(stmt.selfTy);
 
                     impls.push([stmt.selfTy, stmt]);
-                    for (const item of stmt.items) {
-                        switch (item.type) {
-                            case 'Fn': visitFnDecl(item.decl, stmt); break;
-                            default: assertUnreachable(item.type);
+
+                    // Introduce an unnamed scope so that we never try to resolve a type relative path normally.
+                    // Paths to impl items must be resolved during typecheck.
+                    // This is necessary so that forEachRelativePath can continue after a type relative path
+                    withUnnamedScope(() => {
+                        for (const item of stmt.items) {
+                            switch (item.type) {
+                                case 'Fn': visitFnDecl(item.decl, stmt); break;
+                                default: assertUnreachable(item.type);
+                            }
                         }
-                    }
+                    });
                 };
 
                 if (stmt.selfTy.type === 'Path') {
@@ -650,8 +713,13 @@ export function computeResolutions(ast: Module): Resolutions {
 
             switch (unresolved.node.type) {
                 case 'Expr': {
+                    // const p = unresolved.node.value as { type: 'Path' } & Expr;
+                    // if (p.path.segments.map(s => s.ident).join('::') === 'str::to_string') {
+                    //     const x = Array.from(valueNs.entries()).filter(x => x[0].startsWith('str::'));
+                    //     console.log(x, p.path.segments);
+                    // }
                     let res: [ValueResolution, string] | undefined;
-                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.path, valueNs, ResolveModules.No)) {
+                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.node.value.span, unresolved.path, valueNs, ResolveModules.No)) {
                         progressed = true;
                         valueResolutions.set(unresolved.node.value, res[0]);
                     } else {
@@ -675,7 +743,7 @@ export function computeResolutions(ast: Module): Resolutions {
                 }
                 case 'Ty': {
                     let res: [TypeResolution, string] | undefined;
-                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.path, typeNs, ResolveModules.No)) {
+                    if (res = tryEarlyResolvePath(unresolved.fromPath, unresolved.node.value.span, unresolved.path, typeNs, ResolveModules.No)) {
                         progressed = true;
                         tyResolutions.set(unresolved.node.value, res[0]);
                     } else {

@@ -1,0 +1,11 @@
+mod x {
+    impl str {
+        fn method(self*) {}
+        fn func() {}
+    }
+}
+
+fn main() {
+    str::func();
+    "this is a".method();
+}
