@@ -1,11 +1,11 @@
 import { options } from "./cli";
 import { itemInLateImpl, LateImpls } from "./impls";
 import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait, Path, GenericArg } from "./parse";
-import { Resolutions, PrimitiveTy, BindingPat, TypeResolution } from "./resolve";
+import { Resolutions, PrimitiveTy, BindingPat, TypeResolution, TraitFn } from "./resolve";
 import { SourceMap, Span, ppSpan, shrinkToHi } from "./span";
 import { TokenType } from "./token";
-import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, eqTy, TyParamCheck, genericArgsOfTy } from "./ty";
-import { assert, assertUnreachable, inspect, swapRemove, todo } from "./util";
+import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, flagsOfTys, withoutTyVid } from "./ty";
+import { assert, assertUnreachable, expectLast, inspect, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
@@ -20,13 +20,15 @@ type FnLocalState = {
     returnFound: boolean;
 };
 
+export type TypeckTypeRelativeResolution = { type: 'FnDef', value: FnDecl } | { type: 'TraitFn', value: TraitFn };
+
 export type TypeckResults = {
     infcx: Infcx,
     loweredTys: Map<AstTy, Ty>,
     instantiatedFnSigs: Map<Expr, InstantiatedFnSig>,
     exprTys: Map<Expr, Ty>,
     patTys: Map<LetDecl | FnParameter | BindingPat, Ty>,
-    typeRelativeResolutions: Map<TypeResolution, ImplItem>,
+    typeRelativeResolutions: Map<TypeResolution, TypeckTypeRelativeResolution>,
     selectedMethods: Map<Expr, { type: 'Fn' } & ImplItem>,
     hadErrors: boolean,
     coercions: Map<Expr, Coercion[]>,
@@ -179,7 +181,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
         if (coercions.has(expr)) coercions.get(expr)!.push(coercion);
         coercions.set(expr, [coercion]);
     }
-    const typeRelativeResolutions: Map<TypeResolution, ImplItem> = new Map();
+    const typeRelativeResolutions: Map<TypeResolution, TypeckTypeRelativeResolution> = new Map();
 
     const lateImpls: LateImpls = res.impls.map(([ty, impl]) => {
         return [lowerTy(ty), impl]
@@ -397,13 +399,49 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     }
                 }
                 case 'Path': {
+                    function pushSegmentGenerics(genericCount: number, segment: PathSegment<AstTy>, into: Ty[]) {
+                        if (segment.args.length > 0) {
+                            if (segment.args.length !== genericCount) {
+                                error(
+                                    sm,
+                                    expr.span,
+                                    'generic argument count mismatch',
+                                    `item is declared with ${genericCount} generic parameters, but ${segment.args.length} were specified`
+                                );
+                            }
+                            into.push(...segment.args.map(g => lowerTy(g.ty)));
+                        } else {
+                            // ::<> not present at all, insert ty vars
+                            for (let i = 0; i < genericCount; i++) {
+                                into.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
+                            }
+                        }
+                    }
+
+
                     const litres = res.valueResolutions.get(expr)!;
                     switch (litres.type) {
-                        // TODO: is EMPTY_FLAGS correct here..?
-                        case 'FnDecl': return { type: 'FnDef', flags: EMPTY_FLAGS, decl: litres };
-                        case 'ExternFnDecl': return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres };
-                        case 'TraitFn':
-                            return { type: 'TraitFn', value: litres.value, flags: EMPTY_FLAGS };
+                        case 'FnDecl': {
+                            // free_fn()
+                            const args: Ty[] = [];
+                            assert(litres.parent === null, 'FnDecl resolution must be a free function, but got one with a parent impl');
+                            pushSegmentGenerics(litres.sig.generics.length, expectLast(expr.path.segments), args);
+                            return { type: 'FnDef', flags: flagsOfTys(args), decl: litres, args };
+                        }
+                        case 'ExternFnDecl': {
+                            const args: Ty[] = [];
+                            pushSegmentGenerics(litres.sig.generics.length, expectLast(expr.path.segments), args);
+                            return { type: 'ExternFnDef', flags: EMPTY_FLAGS, decl: litres, args };
+                        }
+                        case 'TraitFn': {
+                            // Trait::assoc()
+
+                            // Self type is an inference variable.
+                            const args: Ty[] = [infcx.mkTyVar({ type: 'GenericArg', span: expr.span })];
+
+                            pushSegmentGenerics(litres.value.sig.generics.length, expectLast(expr.path.segments), args);
+                            return { type: 'TraitFn', value: litres.value, flags: flagsOfTys(args), args };
+                        }
                         case 'LetDecl':
                         case 'Binding': return patTys.get(litres)!;
                         case 'FnParam': return patTys.get(litres.param)!;
@@ -417,8 +455,34 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                             if (!item) {
                                 bug(expr.span, `item '${litres.segments[0].ident}' not found on type ${ppTy(ty)}`);
                             }
-                            typeRelativeResolutions.set(litres, item);
-                            return { type: 'FnDef', decl: item.decl, flags: EMPTY_FLAGS };
+                            if (!item.decl.parent) {
+                                bug(item.decl.body.span, 'associated function has no parent impl')
+                            }
+
+                            const tyAndItem = expr.path.segments.slice(-2);
+
+                            if (item.decl.parent.ofTrait) {
+                                const trait = res.tyResolutions.get(item.decl.parent.ofTrait) as Trait;
+                                const args: Ty[] = [
+                                    ty // self type
+                                ];
+
+                                // Self generic arg has already been added and it also cannot be named with generic args
+                                pushSegmentGenerics(item.decl.parent.generics.length, tyAndItem[0], args);
+                                pushSegmentGenerics(item.decl.sig.generics.length, tyAndItem[1], args);
+
+                                const relRes: Ty = { type: 'TraitFn', flags: flagsOfTys(args), value: { parentTrait: trait, sig: item.decl.sig }, args };
+                                typeRelativeResolutions.set(litres, relRes);
+                                return relRes;
+                            } else {
+                                const args: Ty[] = [];
+
+                                pushSegmentGenerics(item.decl.parent.generics.length, tyAndItem[0], args);
+                                pushSegmentGenerics(item.decl.sig.generics.length, tyAndItem[1], args);
+
+                                typeRelativeResolutions.set(litres, { type: 'FnDef', value: item.decl });
+                                return { type: 'FnDef', decl: item.decl, flags: flagsOfTys(args), args };
+                            }
                         }
                         default: assertUnreachable(litres);
                     }
@@ -529,74 +593,31 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                 }
                 case 'FnCall': {
                     const callee = typeckExpr(expr.callee);
-                    if (expr.callee.type !== 'Path') {
-                        // TODO: move the substitution stuff to typechecking paths specifically
-                        bug(expr.span, 'callee must be a path to a FnDef');
+
+                    let astSig: AstFnSignature;
+                    let selfTy: Ty | null;
+                    switch (callee.type) {
+                        case 'ExternFnDef':
+                            astSig = callee.decl.sig;
+                            selfTy = null;
+                            break;
+                        case 'FnDef':
+                            astSig = callee.decl.sig;
+                            selfTy = callee.decl.parent ? lowerTy(callee.decl.parent.selfTy) : null;
+                            break;
+                        case 'TraitFn':
+                            astSig = callee.value.sig;
+                            selfTy = callee.args[0];
+                            break;
+                        default:
+                            bug(expr.span, 'callee must be a fn:' + callee.type);
                     }
 
                     const sig: InstantiatedFnSig = {
                         parameters: [],
                         ret: UNIT,
-                        args: []
+                        args: callee.args,
                     };
-
-                    let astSig: AstFnSignature;
-                    let selfTy: Ty | null;
-                    if (callee.type === 'FnDef' || callee.type === 'ExternFnDef') {
-                        astSig = callee.decl.sig;
-                        const parent = (callee.decl as FnDecl).parent;
-                        selfTy = parent ? lowerTy(parent.selfTy) : null;
-
-                        let segmentsAndGenerics: [PathSegment<AstTy>, Generics][];
-                        if (callee.type === 'FnDef' && callee.decl.parent !== null) {
-                            // This is a call to an associated function.
-                            // The parent `impl` can have generics that we need to subtitute also
-
-                            const [ty, assoc] = expr.callee.path.segments.slice(-2);
-                            segmentsAndGenerics = [
-                                [ty, callee.decl.parent.generics],
-                                [assoc, callee.decl.sig.generics],
-                            ];
-                        } else {
-                            // This is a call to a free function.
-                            segmentsAndGenerics = [
-                                [expr.callee.path.segments[expr.callee.path.segments.length - 1], callee.decl.sig.generics]
-                            ];
-                        }
-
-                        for (const [segment, generics] of segmentsAndGenerics) {
-                            if (segment.args.length === 0) {
-                                for (let i = 0; i < generics.length; i++) {
-                                    sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
-                                }
-                            } else {
-                                for (const arg of segment.args) {
-                                    if (arg.ty.type === 'Infer') {
-                                        sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
-                                    } else {
-                                        sig.args.push(lowerTy(arg.ty));
-                                    }
-                                }
-                            }
-                        }
-                    } else if (callee.type === 'TraitFn') {
-                        astSig = callee.value.sig;
-                        selfTy = infcx.mkTyVar({ type: 'GenericArg', span: expr.span });
-                        // Implicit `Self` type in `<??? as Default>::default`
-                        sig.args.push(selfTy);
-
-                        // Traits currently don't have generic parameters, so we only need to consider the last associated fn segment's generics
-                        const segments = expr.callee.path.segments;
-                        for (const arg of segments[segments.length - 1].args) {
-                            if (arg.ty.type === 'Infer') {
-                                sig.args.push(infcx.mkTyVar({ type: 'GenericArg', span: expr.span }));
-                            } else {
-                                sig.args.push(lowerTy(arg.ty));
-                            }
-                        }
-                    } else {
-                        bug(expr.span, `invalid callee: ${callee.type}`);
-                    }
 
 
                     // with `genericArgs` created we can fix up the signature
@@ -1078,9 +1099,11 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                 // the constrained type might itself reference other type variables, see tests/later-infer.chg for a full example
                 return instantiateTyVars(infcx.tyVars[ty.id].constrainedTy!);
             case 'FnDef':
+                return { type: ty.type, flags: withoutTyVid(ty.flags), args: ty.args.map(ty => instantiateTyVars(ty)), decl: ty.decl };
             case 'ExternFnDef':
+                return { type: ty.type, flags: withoutTyVid(ty.flags), args: ty.args.map(ty => instantiateTyVars(ty)), decl: ty.decl };
             case 'TraitFn':
-                spanless_bug('cannot instantiate FnDef, this should be handled separately for fn calls');
+                return { type: ty.type, flags: withoutTyVid(ty.flags), args: ty.args.map(ty => instantiateTyVars(ty)), value: ty.value };
             case 'int':
             case 'str':
             case 'TyParam':

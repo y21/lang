@@ -2,9 +2,9 @@ type error: type annotations needed
  -> nested-overflow.chg:3:10
 
   let x = bitcast(0);
-          ^^^^^^^^^^
+          ^^^^^^^
 type error: type annotations needed
  -> nested-overflow.chg:4:6
 
   x = bitcast(1);
-      ^^^^^^^^^^
+      ^^^^^^^

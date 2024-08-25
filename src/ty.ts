@@ -15,9 +15,9 @@ export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'str' }
     | { type: 'Array', elemTy: Ty, len: number }
     | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait }
-    | { type: 'FnDef', decl: FnDecl }
-    | { type: 'TraitFn', value: TraitFn }
-    | { type: 'ExternFnDef', decl: ExternFnDecl }
+    | { type: 'FnDef', decl: FnDecl, args: Ty[] }
+    | { type: 'TraitFn', value: TraitFn, args: Ty[] }
+    | { type: 'ExternFnDef', decl: ExternFnDecl, args: Ty[] }
     | { type: 'Pointer', mtb: Mutability, pointee: Ty }
     | RecordType
     | { type: 'Alias', decl: TyAliasDecl, alias: Ty, args: Ty[] }
@@ -42,6 +42,13 @@ export function hasTyVid(ty: Ty): boolean {
 export function removeTyVid(ty: Ty): Ty {
     ty.flags &= ~TYVID_MASK;
     return ty;
+}
+export function flagsOfTys(tys: Iterable<Ty>): number {
+    let flags = EMPTY_FLAGS;
+    for (const ty of tys) {
+        flags |= ty.flags;
+    }
+    return flags;
 }
 export const I8: Ty & { type: 'int' } = { type: 'int', flags: EMPTY_FLAGS, value: { signed: true, bits: 8 } };
 export const U8_PTR: Ty & { type: 'Pointer' } = { type: 'Pointer', mtb: 'imm', flags: EMPTY_FLAGS, pointee: { type: 'int', value: { bits: 8, signed: false }, flags: EMPTY_FLAGS } };

@@ -2,4 +2,4 @@ type error: type annotations needed
  -> unconstrained-generics.chg:5:11
 
     return foo();
-           ^^^^^
+           ^^^

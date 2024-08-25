@@ -19,6 +19,13 @@ export function swapRemove<T>(v: T[], index: number): T {
     v.length -= 1;
     return element;
 }
+export function expectLast<T>(v: T[]): T {
+    const lastItem = v[v.length - 1];
+    if (lastItem === undefined) {
+        throw new Error('called expectLast on empty array');
+    }
+    return lastItem;
+}
 
 export function todo(what?: string): never {
     throw new Error('Todo: ' + what);
