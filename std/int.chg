@@ -5,6 +5,7 @@ use root::std::intrinsics::trunc;
 use root::std::ptr;
 use root::std::string::String;
 use root::std::fatal;
+use root::std::fmt::Display;
 
 fn signed_cast<T, U>(src: T): U {
     if sizeof::<T>() != sizeof::<U>() {
@@ -13,3 +14,27 @@ fn signed_cast<T, U>(src: T): U {
     return bitcast(src);
 }
 
+impl Display for i32 {
+  fn to_string(self*): String {
+    fn inner(num: i32, out: String*) {
+      if num > 9 {
+        inner(num / 10, out);
+        out.push_byte(b'0' + trunc(num % 10));
+      } else {
+        out.push_byte(b'0' + trunc(num));
+      }
+    }
+
+    let out = String::new();
+
+    let num = if *self < 0 {
+      out.push_byte(b'-');
+      -*self
+    } else {
+      *self
+    };
+
+    inner(num, &out);
+    return out;
+  }
+}

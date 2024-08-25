@@ -1,6 +1,9 @@
 use root::std::intrinsics::bitcast;
 use root::std::ptr;
 use root::std::fatal;
+use root::std::fmt::Display;
+use root::std::string::String;
+use root::std::libc::memcpy;
 
 type StrRepr = { ptr: u8*, len: u64 };
 
@@ -43,4 +46,20 @@ fn substr_to(s: str*, to: u64): str* {
     fatal("string out of bounds");
   }
   return StrRepr::to_str(.{ ptr: repr.ptr, len: to });
+}
+
+impl Display for str {
+  fn to_string(self*): String {
+    let repr = StrRepr::from(self);
+    let out = String::with_capacity(repr.len);
+    memcpy(ptr::cast::<u8, ()>(out.ptr), ptr::cast::<u8, ()>(repr.ptr), repr.len);
+    out.len = repr.len;
+    return out;
+  }
+}
+
+impl Display for str* {
+  fn to_string(self*): String {
+    return self*.to_string();
+  }
 }

@@ -1,0 +1,5 @@
+use root::std::string::String;
+
+trait Display {
+    fn to_string(self*): String;
+}
