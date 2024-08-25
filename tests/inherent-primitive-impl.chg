@@ -3,9 +3,16 @@ mod x {
         fn method(self*) {}
         fn func() {}
     }
+    trait Foo {
+        fn bar();
+    }
+    impl Foo for str {
+        fn bar() {}
+    }
 }
 
 fn main() {
     str::func();
+    str::bar();
     "this is a".method();
 }

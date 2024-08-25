@@ -1,15 +1,27 @@
 expr @ 3:26 4:0 => ()
 expr @ 4:19 5:0 => ()
-expr @ 9:10 9:14 => fn func(...)
-expr @ 9:10 9:16 => ()
-expr @ 10:5 10:16 => str*
-expr @ 10:5 10:25 => ()
-expr @ 8:11 12:1 => ()
+expr @ 10:18 11:0 => ()
+expr @ 15:10 15:14 => fn func(...)
+expr @ 15:10 15:16 => ()
+expr @ 16:10 16:13 => fn bar(...)
+expr @ 16:10 16:15 => ()
+expr @ 17:5 17:16 => str*
+expr @ 17:5 17:25 => ()
+expr @ 14:11 19:1 => ()
 
 
 @ct.0 = private constant [9 x i8] c"this is a"
 
 define void @root$x$str$$LB$0$RB$func() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @root$x$str$$LB$3$RB$bar$LT$str$GT$() {
 prologue:
 br label %bb.0
 
@@ -38,10 +50,14 @@ bb.0:
 br label %bb.1
 
 bb.1:
-%l.1 = call {} bitcast(void({i8*, i64})* @root$x$str$$LB$0$RB$method to {}({i8*, i64})*)({i8*, i64} {i8* bitcast([9 x i8]* @ct.0 to i8*), i64 9})
+%l.1 = call {} bitcast(void()* @root$x$str$$LB$3$RB$bar$LT$str$GT$ to {}()*)()
 br label %bb.2
 
 bb.2:
+%l.2 = call {} bitcast(void({i8*, i64})* @root$x$str$$LB$0$RB$method to {}({i8*, i64})*)({i8*, i64} {i8* bitcast([9 x i8]* @ct.0 to i8*), i64 9})
+br label %bb.3
+
+bb.3:
 ret void
 
 }
