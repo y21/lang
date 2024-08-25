@@ -4,22 +4,30 @@ mod mem;
 mod ptr;
 mod str;
 mod vec;
+mod fmt;
 mod cstr;
 mod string;
 mod int;
 mod fs;
 
-fn print(s: str*) {
-    let parts = str::StrRepr::from(s);
+fn print<T>(s: T)
+where
+    T: fmt::Display
+{
+    let string = T::to_string(&s);
+    let parts = str::StrRepr::from(string.as_str());
     libc::write(1, ptr::cast(parts.ptr), parts.len);
 }
 
-fn println(s: str*) {
-  print(s);
-  print("\n");
+fn println<T>(s: T)
+where
+    T: fmt::Display
+{
+    print(s);
+    print("\n");
 }
 
 fn fatal(s: str*) {
-  println(s);
-  libc::abort();
+    println(s);
+    libc::abort();
 }
