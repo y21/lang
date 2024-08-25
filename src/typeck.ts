@@ -1,11 +1,11 @@
 import { options } from "./cli";
-import { itemInLateImpl, LateImpls } from "./impls";
-import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait, Path, GenericArg } from "./parse";
+import { itemInLateImpl, LateImplLookupResult, LateImpls } from "./impls";
+import { LetDecl, FnParameter, AstTy, Expr, AstFnSignature, RecordFields, Stmt, Module, FnDecl, PathSegment, Pat, Impl, ImplItem, Generics, Trait, Path, GenericArg, WhereClause } from "./parse";
 import { Resolutions, PrimitiveTy, BindingPat, TypeResolution, TraitFn } from "./resolve";
 import { SourceMap, Span, ppSpan, shrinkToHi } from "./span";
 import { TokenType } from "./token";
 import { Ty, UNIT, isUnit, BOOL, U64, RecordType, hasTyVid, EMPTY_FLAGS, TYPARAM_MASK, TYVID_MASK, instantiateTy, ppTy, normalize, I32, STR_SLICE, U8, NEVER, flagsOfTys, withoutTyVid } from "./ty";
-import { assert, assertUnreachable, expectLast, inspect, swapRemove, todo } from "./util";
+import { assert, assertUnreachable, expectLast, getOrInsert, inspect, swapRemove, todo } from "./util";
 import { visitInStmt } from "./visit";
 import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
@@ -17,10 +17,14 @@ const MAX_CONSTRAINT_DEPTH = 200;
 
 type FnLocalState = {
     expectedReturnTy: Ty;
+    whereClause: LoweredWhereClause,
     returnFound: boolean;
 };
 
+export type LoweredTypeBound = { type: 'TraitImpl', ty: Ty, trait: Trait };
+export type LoweredWhereClause = { bounds: LoweredTypeBound[] };
 export type TypeckTypeRelativeResolution = { type: 'FnDef', value: FnDecl } | { type: 'TraitFn', value: TraitFn };
+const EMPTY_WHERE_CLAUSE: LoweredWhereClause = { bounds: [] };
 
 export type TypeckResults = {
     infcx: Infcx,
@@ -136,8 +140,8 @@ class Infcx {
         return ty;
     }
 
-    withFn(expect: Ty | undefined, f: () => void) {
-        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false });
+    withFn(expect: Ty | undefined, whereClause: LoweredWhereClause, f: () => void) {
+        this.fnStack.push({ expectedReturnTy: expect || UNIT, returnFound: false, whereClause });
         f();
         const { expectedReturnTy, returnFound } = this.fnStack.pop()!;
         if (!isUnit(expectedReturnTy) && !returnFound) {
@@ -157,6 +161,10 @@ class Infcx {
             return this.tyVars[ty.id].constrainedTy!;
         }
         return ty;
+    }
+
+    whereClause(): LoweredWhereClause {
+        return expectLast(this.fnStack).whereClause;
     }
 }
 
@@ -224,6 +232,21 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
             }
             default: assertUnreachable(res)
         }
+    }
+
+    function lowerWhereClause(where: WhereClause): LoweredWhereClause {
+        const bounds: LoweredTypeBound[] = [];
+        for (const bound of where.bounds) {
+            const ty = lowerTy(bound.ty);
+            for (const astTrait of bound.traits) {
+                const trait = res.tyResolutions.get(astTrait);
+                if (!trait || trait.type !== 'Trait') {
+                    spanless_bug('trait bound path must point to a trait, got: ' + trait);
+                }
+                bounds.push({ ty, trait, type: 'TraitImpl' });
+            }
+        }
+        return { bounds };
     }
 
     function lowerTy(ty: AstTy): Ty {
@@ -302,7 +325,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
 
     function typeckFn(decl: FnDecl, enclosingImpl?: Impl) {
         const ret = typeckFnSig(decl.sig, enclosingImpl);
-        infcx.withFn(ret, () => { typeckExpr(decl.body); });
+        infcx.withFn(ret, decl.where ? lowerWhereClause(decl.where) : EMPTY_WHERE_CLAUSE, () => { typeckExpr(decl.body); });
     }
 
     function typeckStmt(stmt: Stmt) {
@@ -451,10 +474,25 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                             if (litres.segments.length != 1) {
                                 bug(expr.span, 'type relative path must have exactly one trailing segment, got: ' + inspect(litres.segments));
                             }
-                            const item = itemInLateImpl(lateImpls, ty, litres.segments[0].ident);
-                            if (!item) {
+
+                            if (ty.type === 'TyParam') {
+                                const where = infcx.whereClause();
+                                const res = itemInLateImpl(lateImpls, ty, litres.segments[0].ident, where);
+                                if (!res || res.type !== 'TraitItem') {
+                                    bug(expr.span, 'generic type relative lookup was not a trait item')
+                                }
+                                const args: Ty[] = [ty];
+                                pushSegmentGenerics(res.value.sig.generics.length, litres.segments[0], args);
+                                const traitFn: Ty = { type: 'TraitFn', args, flags: flagsOfTys(args), value: { parentTrait: res.trait, sig: res.value.sig } };
+                                typeRelativeResolutions.set(litres, traitFn);
+                                return traitFn;
+                            }
+
+                            const lookupResult = itemInLateImpl(lateImpls, ty, litres.segments[0].ident) as ({ type: 'ImplItem' } & LateImplLookupResult) | null;
+                            if (!lookupResult) {
                                 bug(expr.span, `item '${litres.segments[0].ident}' not found on type ${ppTy(ty)}`);
                             }
+                            const { value: item } = lookupResult;
                             if (!item.decl.parent) {
                                 bug(item.decl.body.span, 'associated function has no parent impl')
                             }
@@ -750,16 +788,20 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     // the pointe_e_ type is exclusively used for method lookup/selection
                     const derefTargetTy = targetTy.type === 'Pointer' ? targetTy.pointee : targetTy;
 
-                    let selectedMethod = itemInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
-                    const hasReceiver = selectedMethod?.decl.sig.parameters[0]?.type === 'Receiver';
+                    const methodLookupResult = itemInLateImpl(lateImpls, derefTargetTy, expr.path.ident);
+                    if (methodLookupResult && methodLookupResult.type !== 'ImplItem') {
+                        bug(expr.span, 'must be an impl item')
+                    }
+                    const hasReceiver = methodLookupResult?.value.decl.sig.parameters[0]?.type === 'Receiver';
 
-                    if (!selectedMethod || !hasReceiver) {
+                    if (!methodLookupResult || !hasReceiver) {
                         err(
                             expr.span,
                             `method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`,
                             !hasReceiver ? 'this function exists on the type but it has no `self` receiver' : undefined
                         );
                     }
+                    const { value: selectedMethod } = methodLookupResult;
 
                     if (selectedMethod.decl.sig.parameters[0].type !== 'Receiver') {
                         err(expr.span, `selected method '${expr.path.ident}' does not have a receiver parameter`);

@@ -1,0 +1,60 @@
+fallback @ 16:13 16:15
+expr @ 4:23 5:0 => ()
+expr @ 11:12 11:15 => fn foo(...)
+expr @ 11:17 11:18 => T
+expr @ 11:16 11:18 => T*
+expr @ 11:12 11:19 => ()
+expr @ 10:5 13:0 => ()
+expr @ 16:13 16:15 => i32
+expr @ 17:8 17:11 => fn any(...)
+expr @ 17:13 17:14 => i32
+expr @ 17:12 17:14 => i32*
+expr @ 17:8 17:15 => ()
+expr @ 15:11 19:1 => ()
+
+
+
+define void @root$w$$LB$0$RB$$LB$1$RB$foo$LT$$ptr$imm$i32$GT$(i32** %lt.0) {
+prologue:
+%l.0 = alloca i32**
+store i32** %lt.0, i32*** %l.0
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @root$w$any$LT$$ptr$imm$i32$GT$(i32* %lt.0) {
+prologue:
+%l.0 = alloca i32*
+store i32* %lt.0, i32** %l.0
+br label %bb.0
+
+bb.0:
+%l.2 = bitcast i32** %l.0 to i32**
+%l.1 = call {} bitcast(void(i32**)* @root$w$$LB$0$RB$$LB$1$RB$foo$LT$$ptr$imm$i32$GT$ to {}(i32**)*)(i32** %l.2)
+br label %bb.1
+
+bb.1:
+ret void
+
+}
+
+define void @main() {
+prologue:
+%l.0 = alloca i32
+br label %bb.0
+
+bb.0:
+store i32 42, i32* %l.0
+%l.2 = bitcast i32* %l.0 to i32*
+%l.1 = call {} bitcast(void(i32*)* @root$w$any$LT$$ptr$imm$i32$GT$ to {}(i32*)*)(i32* %l.2)
+br label %bb.1
+
+bb.1:
+ret void
+
+}
+
+

@@ -1,5 +1,5 @@
 import { bug, spanless_bug } from "./error";
-import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl, AstFnSignature } from "./parse";
+import { FnDecl, ExternFnDecl, RecordFields, BinaryOp, UnaryOp, LetDecl, FnParameter, Stmt, Expr, AstEnum, VariantId, Impl, AstFnSignature, Trait } from "./parse";
 import { BindingPat, Resolutions, TraitFn, TypeResolution } from "./resolve";
 import { joinSpan } from "./span";
 import { TokenType } from "./token";
@@ -13,7 +13,7 @@ export type MirValue = { type: 'int', ity: IntTy, value: number }
     | { type: 'Local', value: MirLocalId<true> }
     | { type: 'Unreachable' }
     | { type: 'FnDef', value: FnDecl }
-    | { type: 'TraitFn', value: TraitFn }
+    | { type: 'TraitFn', value: FnDecl }
     | { type: 'ExternFnDef', value: ExternFnDecl }
     | { type: 'Record', value: RecordFields<MirValue> }
     | { type: 'Tuple', value: MirValue[] }
@@ -222,18 +222,6 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 case 'Path': {
                     const resolution = resolutions.valueResolutions.get(expr)!;
                     switch (resolution.type) {
-                        case 'FnDecl': {
-                            return {
-                                type: 'FnDef',
-                                value: resolution
-                            };
-                        };
-                        case 'TraitFn': {
-                            return {
-                                type: 'TraitFn',
-                                value: resolution.value
-                            }
-                        }
                         case 'FnParam':
                         case 'LetDecl':
                         case 'Binding': {
@@ -247,7 +235,32 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         }
                         case 'ExternFnDecl': return { type: 'ExternFnDef', value: resolution };
                         case 'Variant': return { type: 'Variant', enum: resolution.enum, variant: resolution.variant };
-                        case 'TypeRelative': return typeck.typeRelativeResolutions.get(resolution)!;
+                        case 'TypeRelative':
+                        case 'FnDecl':
+                        case 'TraitFn': {
+                            const ty = typeck.exprTys.get(expr)!;
+                            if (ty.type === 'FnDef') {
+                                return { type: 'FnDef', value: ty.decl };
+                            } else if (ty.type === 'TraitFn') {
+                                const selfTy = instantiateTy(ty.args[0], args);
+                                for (const [implSelfTy, impl] of typeck.impls) {
+                                    if (impl.ofTrait) {
+                                        const trait = resolutions.tyResolutions.get(impl.ofTrait!) as Trait;
+
+                                        if (eqTy(selfTy, implSelfTy, TyParamCheck.Unreachable) && trait === ty.value.parentTrait) {
+                                            const item = impl.items.find(i => i.decl.sig.name === ty.value.sig.name);
+                                            if (item) {
+                                                return { type: 'TraitFn', value: item.decl };
+                                            }
+                                        }
+                                    }
+                                }
+
+                                bug(expr.span, 'failed to find impl for trait fn call');
+                            } else {
+                                bug(expr.span, 'call target has invalid type: ' + ty);
+                            }
+                        }
                         default: assertUnreachable(resolution);
                     }
                 }
@@ -433,18 +446,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     if (callee.type === 'FnDef' || callee.type === 'ExternFnDef') {
                         decl = callee.value;
                     } else if (callee.type === 'TraitFn') {
-                        const selfTy = sig.args[0];
-                        for (const [implTy, impl] of typeck.impls) {
-                            if (eqTy(selfTy, implTy, TyParamCheck.IgnoreAgainst) && impl.ofTrait) {
-                                const resolvedTrait = resolutions.tyResolutions.get(impl.ofTrait) as ({ type: 'Trait' } & TypeResolution);
-                                if (resolvedTrait === callee.value.parentTrait) {
-                                    decl = impl.items.find(item => item.decl.sig.name === callee.value.sig.name)!.decl;
-                                }
-                            }
-                        }
-                        if (!callee) {
-                            bug(expr.span, 'fn impl not found');
-                        }
+                        decl = callee.value;
                     } else {
                         bug(expr.span, `unknown callee type: ${callee.type}`);
                     }

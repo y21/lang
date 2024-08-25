@@ -1,7 +1,7 @@
 import { spanless_bug } from "./error";
 import { RecordFields, FnDecl, TyAliasDecl, ExternFnDecl, Mutability, genericsOfDecl, AstEnum, Impl, Trait, AstFnSignature, AstTy, } from "./parse";
 import { TraitFn } from "./resolve";
-import { assert } from "./util";
+import { assert, assertUnreachable } from "./util";
 
 export type RecordType = { type: 'Record', fields: RecordFields<Ty> };
 export type Bits = 8 | 16 | 32 | 64;
@@ -189,7 +189,12 @@ export function genericArgsOfTy(ty: Ty): Ty[] {
 export const enum TyParamCheck {
     // Always succeed when comparing the LHS type with a type parameter.
     // This is used when finding an impl for a method call.
-    IgnoreAgainst
+    IgnoreAgainst,
+    // The type parameter must be bound at the same item and have the same index
+    StrictEq,
+    // They should never be encountered.
+    // This is the case for MIR and LLVM codegen where all type parameters are instantiated
+    Unreachable
 }
 
 export function eqManyTys(lty: Ty[], rty: Ty[], tyc: TyParamCheck) {
@@ -197,7 +202,28 @@ export function eqManyTys(lty: Ty[], rty: Ty[], tyc: TyParamCheck) {
 }
 
 export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
-    if (tyc === TyParamCheck.IgnoreAgainst && rty.type === 'TyParam') return true;
+    switch (tyc) {
+        case TyParamCheck.IgnoreAgainst:
+            if (rty.type === 'TyParam') return true;
+            break;
+        case TyParamCheck.StrictEq:
+            if (lty.type === 'TyParam') {
+                if (rty.type === 'TyParam'
+                    && lty.id === rty.id
+                    && lty.parentItem === rty.parentItem) {
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+            break;
+        case TyParamCheck.Unreachable:
+            if (lty.type === 'TyParam') {
+                spanless_bug('encountered type parameter in TyParamCheck.Unreachable mode')
+            }
+            break;
+        default: assertUnreachable(tyc);
+    }
 
     if (lty.type === 'Alias' && rty.type === 'Alias') {
         return lty.decl === rty.decl && (tyc === TyParamCheck.IgnoreAgainst ? true : eqManyTys(lty.args, rty.args, tyc));
@@ -216,6 +242,8 @@ export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
         || lty.type === 'never' && rty.type === 'never'
     ) {
         return true;
+    } else if (lty.type === 'Pointer' && rty.type === 'Pointer') {
+        return lty.mtb === rty.mtb && eqTy(lty.pointee, rty.pointee, tyc);
     } else {
         return false;
     }

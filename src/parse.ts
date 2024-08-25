@@ -74,8 +74,15 @@ export type AstFnSignature = {
 export type FnDecl = {
     type: 'FnDecl',
     sig: AstFnSignature,
+    where: WhereClause | null,
     body: Expr,
     parent: Impl | null
+};
+export type WhereClause = { bounds: WhereBound[] };
+export type WhereBound = {
+    ty: AstTy,
+    // Stored as tys so they can be lowered
+    traits: (AstTy & { type: 'Path' })[]
 };
 export type ExternFnDecl = {
     type: 'ExternFnDecl'
@@ -292,6 +299,29 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
         } else {
             return false;
         }
+    }
+
+    // Expects the next token to be `where` and that the where clause is terminated by a `{` token.
+    function parseMaybeWhereClause(): WhereClause | null {
+        if (!eatToken(TokenType.Where, false)) {
+            return null;
+        }
+
+        const bounds: WhereBound[] = [];
+        while (tokens[i] && tokens[i].ty !== TokenType.LBrace) { // don't eat {
+            const ty = parseTy();
+            eatToken(TokenType.Colon);
+            const traits: (AstTy & { type: 'Path' })[] = [];
+            do {
+                const path = parseTy();
+                if (path.type !== 'Path') {
+                    err(path.span, 'bound must be a trait path');
+                }
+                traits.push(path);
+            } while (eatToken(TokenType.Plus, false));
+            bounds.push({ ty, traits });
+        }
+        return { bounds };
     }
 
     function parseAttributes(): Attribute[] {
@@ -972,11 +1002,13 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
             case TokenType.Fn: {
                 i++;
                 const sig = parseFnSignature();
+                const where = parseMaybeWhereClause();
                 const body = parseRootStmtExpr();
 
                 return {
                     type: 'FnDecl',
                     body,
+                    where,
                     span: joinSpan(startSpan, tokens[i - 1].span),
                     parent: null,
                     sig

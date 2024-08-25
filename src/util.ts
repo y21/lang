@@ -44,3 +44,12 @@ export function assert(cond: boolean, msg?: string) {
         }
     }
 }
+
+export function getOrInsert<K, V>(map: Map<K, V>, key: K, or: () => V) {
+    let entry = map.get(key);
+    if (!entry) {
+        entry = or();
+        map.set(key, entry);
+    }
+    return entry;
+}

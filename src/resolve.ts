@@ -1,6 +1,6 @@
 import { bug, err } from "./error";
 import { EarlyImpls } from "./impls";
-import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl, GenericArg } from "./parse";
+import { AstFnSignature, Pat, AstTy, Expr, ExternFnDecl, FnDecl, FnParameter, Generics, LetDecl, Path, Module, Stmt, TyAliasDecl, VariantId, Impl, PathSegment, Mod, Trait, UseDecl, GenericArg, WhereClause } from "./parse";
 import { Span } from "./span";
 import { assert, assertUnreachable, swapRemove } from "./util";
 
@@ -212,7 +212,11 @@ export function computeResolutions(ast: Module): Resolutions {
                 }
 
                 let tyRes: TypeResolution | undefined;
-                if ((tyRes = typeNs.get(effectivePath)) && ['Enum', 'Primitive', 'Trait', 'TyAlias'].includes(tyRes.type) && i < suffix.segments.length - 1) {
+                if (
+                    (tyRes = typeNs.get(effectivePath))
+                    && ['Enum', 'Primitive', 'Trait', 'TyAlias', 'TyParam'].includes(tyRes.type)
+                    && i < suffix.segments.length - 1
+                ) {
                     assert(!typeRelativeData);
 
                     typeRelativeData = {
@@ -535,6 +539,17 @@ export function computeResolutions(ast: Module): Resolutions {
         }
     }
 
+    function visitMaybeWhereClause(where: WhereClause | null) {
+        if (where) {
+            for (const bound of where.bounds) {
+                visitTy(bound.ty);
+                for (const trait of bound.traits) {
+                    visitTy(trait);
+                }
+            }
+        }
+    }
+
     function visitFnDecl(decl: FnDecl, impl?: Impl) {
         withNamedScope(decl.sig.name, () => {
             itemUniquePathsForCodegen.set(decl, currentPath);
@@ -550,6 +565,7 @@ export function computeResolutions(ast: Module): Resolutions {
                 parentGenericsCount = 0;
             }
             visitFnSigInScope(decl.sig, decl, parentGenericsCount);
+            visitMaybeWhereClause(decl.where);
             visitExpr(decl.body);
         });
     }

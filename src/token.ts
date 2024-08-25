@@ -65,6 +65,7 @@ export enum TokenType {
     Trait,
     ByteChar,
     Impl,
+    Where
 }
 
 export interface Token {

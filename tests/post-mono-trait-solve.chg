@@ -1,0 +1,18 @@
+mod w {
+    trait X { fn foo(self*); }
+    impl X for i32* {
+        fn foo(self*) {}
+    }
+    
+    fn any<T>(x: T)
+    where
+        T: X
+    {
+        T::foo(&x);
+    }
+}
+
+fn main() {
+    let x = 42;
+    w::any(&x);
+}
