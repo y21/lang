@@ -1083,6 +1083,8 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
                         normPath = path.join(path.dirname(file.path), path.basename(file.path, '.chg'), name + '.chg');
                     }
 
+                    currentPathAttr = null;
+
                     const modFile = addFileToSourceMap(sm, normPath, false);
                     const { stmts } = parse(sm, attrs, modFile);
                     return {
