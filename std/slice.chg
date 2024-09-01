@@ -1,0 +1,15 @@
+use root::std::intrinsics::bitcast;
+
+type Repr<T> = { ptr: T*, len: u64 };
+
+impl<T> T[] {
+    fn as_ptr(self*): T* {
+        let repr: Repr<T> = bitcast(self);
+        return repr.ptr;
+    }
+
+    fn len(self*): u64 {
+        let repr: Repr<T> = bitcast(self);
+        return repr.len;
+    }
+}
