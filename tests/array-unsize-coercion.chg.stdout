@@ -1,0 +1,42 @@
+expr @ 2:22 2:23 => u8
+expr @ 2:25 2:26 => u8
+expr @ 2:28 2:29 => u8
+expr @ 2:31 2:32 => u8
+expr @ 2:21 2:33 => u8[4]
+expr @ 2:20 2:33 => u8[4]*
+expr @ 1:11 4:1 => ()
+
+
+
+define void @main() {
+prologue:
+%l.0 = alloca {i8*, i64}
+br label %bb.0
+
+bb.0:
+%t.0 = alloca [4 x i8]
+%t.1 = getelementptr [4 x i8], [4 x i8]* %t.0, i32 0, i32 0
+store i8 1, i8* %t.1
+%t.2 = getelementptr [4 x i8], [4 x i8]* %t.0, i32 0, i32 1
+store i8 2, i8* %t.2
+%t.3 = getelementptr [4 x i8], [4 x i8]* %t.0, i32 0, i32 2
+store i8 3, i8* %t.3
+%t.4 = getelementptr [4 x i8], [4 x i8]* %t.0, i32 0, i32 3
+store i8 4, i8* %t.4
+%l.1 = load [4 x i8], [4 x i8]* %t.0
+%t.5 = alloca [4 x i8]
+store [4 x i8] %l.1, [4 x i8]* %t.5
+%l.2 = bitcast [4 x i8]* %t.5 to [4 x i8]*
+%t.6 = alloca {i8*, i64}
+%t.7 = getelementptr {i8*, i64}, {i8*, i64}* %t.6, i32 0, i32 0
+%t.8 = getelementptr {i8*, i64}, {i8*, i64}* %t.6, i32 0, i32 1
+%t.9 = bitcast [4 x i8]* %l.2 to i8*
+store i8* %t.9, i8** %t.7
+store i64 4, i64* %t.8
+%l.3 = load {i8*, i64}, {i8*, i64}* %t.6
+store {i8*, i64} %l.3, {i8*, i64}* %l.0
+ret void
+
+}
+
+

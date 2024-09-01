@@ -54,12 +54,14 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
         switch (ty.type) {
             case 'bool': return 'i1';
             case 'int': return `i${ty.value.bits}`;
-            case 'str': spanless_bug('cannot directly lower str type');
+            case 'str':
+            case 'Slice':
+                spanless_bug(`${ty.type} has no known size at compile time and cannot be lowered directly`);
             case 'Pointer':
-                if (ty.pointee.type === 'str') {
-                    return '{i8*, i64}';
-                } else {
-                    return `${llTy(ty.pointee)}*`;
+                switch (ty.pointee.type) {
+                    case 'str': return '{i8*, i64}';
+                    case 'Slice': return `{${llTy(ty.pointee.elemTy)}*, i64}`;
+                    default: return `${llTy(ty.pointee)}*`;
                 }
             case 'ExternFnDef': spanless_bug('extern fn in llir lowering');
             case 'TyParam': spanless_bug('uninstantiated type parameter in llir lowering');
@@ -467,6 +469,29 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
                             // Array local is fully initialized. Finally, load it.
                             output += `%l.${stmt.assignee} = load ${arrayTyS}, ${arrayTyS}* ${arrayLocal}\n`;
 
+                            break;
+                        }
+                        case 'UnsizeArray': {
+                            // Pointers into the slice fat-pointer elements (ptr, len)
+                            const resultLocal = `%t.${tempLocal()}`;
+                            const slicePtrElement = `%t.${tempLocal()}`;
+                            const sliceLenElement = `%t.${tempLocal()}`;
+                            const sliceTyS = llTy(stmt.slicePtrTy);
+                            output += `${resultLocal} = alloca ${sliceTyS}\n`;
+                            output += `${slicePtrElement} = getelementptr ${sliceTyS}, ${sliceTyS}* ${resultLocal}, i32 0, i32 0\n`;
+                            output += `${sliceLenElement} = getelementptr ${sliceTyS}, ${sliceTyS}* ${resultLocal}, i32 0, i32 1\n`;
+
+                            const bitcastTmp = `%t.${tempLocal()}`;
+                            if (stmt.slicePtrTy.pointee.type !== 'Slice') {
+                                spanless_bug('UnsizeArray pointee was not a slice');
+                            }
+                            const sliceElemTyS = llTy(stmt.slicePtrTy.pointee.elemTy);
+                            const arrayTyS = llValTy(mir, stmt.base);
+                            const value = compileValueToLocal(stmt.base);
+                            output += `${bitcastTmp} = bitcast ${arrayTyS} ${value} to ${sliceElemTyS}*\n`;
+                            output += `store ${sliceElemTyS}* ${bitcastTmp}, ${sliceElemTyS}** ${slicePtrElement}\n`;
+                            output += `store i64 ${stmt.len}, i64* ${sliceLenElement}\n`;
+                            output += `%l.${stmt.assignee} = load ${sliceTyS}, ${sliceTyS}* ${resultLocal}\n`;
                             break;
                         }
                         case 'InitArrayLit': {

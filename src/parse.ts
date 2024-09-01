@@ -141,6 +141,7 @@ export type AstEnum = { type: 'Enum', name: string, variants: AstVariant[] };
 export type VariantId = number;
 export type AstTy = { span: Span } & ({ type: 'Path', value: Path<AstTy> }
     | { type: 'Array', elemTy: AstTy, len: number }
+    | { type: 'Slice', elemTy: AstTy }
     | { type: 'Tuple', elements: AstTy[] }
     | { type: 'Pointer', mtb: Mutability, pointeeTy: AstTy }
     | { type: 'Record', fields: RecordFields<AstTy> }
@@ -509,10 +510,16 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
 
         while (i < tokens.length) {
             if (eatToken(TokenType.LSquare, false)) {
-                const len = tokens[i++];
-                if (len.ty !== TokenType.Number) err(tokens[i - 1].span, 'array must have a length component');
-                eatToken(TokenType.RSquare, true);
-                ty = { type: 'Array', elemTy: ty, len: +snip(len.span), span: joinSpan(ty.span, tokens[i].span) };
+                if (eatToken(TokenType.RSquare, false)) {
+                    ty = { type: 'Slice', elemTy: ty, span: joinSpan(ty.span, tokens[i].span) };
+                } else {
+                    const len = tokens[i++];
+                    if (len.ty !== TokenType.Number) {
+                        err(len.span, 'array length must be a number');
+                    }
+                    eatToken(TokenType.RSquare, true);
+                    ty = { type: 'Array', elemTy: ty, len: +snip(len.span), span: joinSpan(ty.span, tokens[i].span) };
+                }
             } else if (eatToken(TokenType.Star, false)) {
                 const mtb: Mutability = tokens[i].ty === TokenType.Mut ? (i++, 'mut') : 'imm';
                 ty = { type: 'Pointer', mtb, pointeeTy: ty, span: joinSpan(ty.span, tokens[i].span) };

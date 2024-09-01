@@ -373,7 +373,9 @@ export function computeResolutions(ast: Module): Resolutions {
                 visitPath(ty.value, { type: 'Ty', value: ty }, typeNs, tyResolutions);
                 break;
             }
-            case 'Array': visitTy(ty.elemTy); break;
+            case 'Array':
+            case 'Slice':
+                visitTy(ty.elemTy); break;
             case 'Pointer': visitTy(ty.pointeeTy); break;
             case 'Record':
                 for (const [, v] of ty.fields) visitTy(v);

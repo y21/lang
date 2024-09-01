@@ -4,7 +4,7 @@ import { BindingPat, Resolutions, TraitFn, TypeResolution } from "./resolve";
 import { joinSpan } from "./span";
 import { TokenType } from "./token";
 import { IntTy, Ty, instantiateTy, isUnit, BOOL, U8, eqTy, TyParamCheck } from "./ty";
-import { exprTy as rawExprTy, InstantiatedFnSig, TypeckResults } from "./typeck";
+import { exprTy as rawExprTyCoerced, InstantiatedFnSig, TypeckResults } from "./typeck";
 import { assertUnreachable, assert, todo } from "./util";
 
 export type MirValue = { type: 'int', ity: IntTy, value: number }
@@ -40,7 +40,9 @@ export type MirStmt = { type: 'Assignment', assignee: MirPlace, value: MirValue 
     | { type: 'Trunc', from_ty: Ty, to_ty: Ty, assignee: MirLocalId<true>, value: MirValue }
     | { type: 'InitArrayLit', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, values: MirValue[] }
     | { type: 'InitArrayRepeat', assignee: MirLocalId<true>, ty: { type: 'Array' } & Ty, value: MirValue, count: number }
-    | { type: 'StrStartsWith', assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue };
+    | { type: 'StrStartsWith', assignee: MirLocalId<true>, lhs: MirValue, rhs: MirValue }
+    // Go from T[n]* to T[]*
+    | { type: 'UnsizeArray', assignee: MirLocalId<true>, base: MirValue, len: number, slicePtrTy: Ty & { type: 'Pointer' } };
 export type MirTerminator = { type: 'Return' }
     | { type: 'Call', assignee: MirLocalId<true>, args: MirValue[], decl: FnDecl | ExternFnDecl, sig: InstantiatedFnSig, target: MirBlockId }
     | { type: 'Conditional', condition: MirValue, then: MirBlockId, else: MirBlockId }
@@ -67,7 +69,8 @@ const _mirBodyCache = new Map<string, MirBody>();
  * calling `astToMir(f, [i32])` will create the MIR body for `function f(v: i32)`, and cache it.
  */
 export function astToMir(src: string, mangledName: string, decl: FnDecl, args: Ty[], resolutions: Resolutions, typeck: TypeckResults): MirBody {
-    const exprTy = (expr: Expr) => rawExprTy(typeck, expr);
+    const exprTyCoercions = (expr: Expr) => rawExprTyCoerced(typeck, expr);
+    const exprTyNoCoercions = (expr: Expr) => typeck.exprTys.get(expr) || bug(expr.span, 'expr does not have a registered type');
 
     function lowerMir(): MirBody {
         if (decl.body.type !== 'Block') bug(decl.body.span, `${decl.sig.name} did not have a block as its body?`);
@@ -211,7 +214,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
         function lowerExprInner(expr: Expr): LowerExprResult {
             switch (expr.type) {
                 case 'Number': {
-                    const ity = exprTy(expr);
+                    const ity = exprTyNoCoercions(expr);
                     if (ity.type !== 'int') {
                         bug(expr.span, 'number expression was not an int type');
                     }
@@ -265,13 +268,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     }
                 }
                 case 'Return': {
-                    const ret = asValue(lowerExpr(expr.value), exprTy(expr.value));
+                    const ret = asValue(lowerExpr(expr.value), exprTyNoCoercions(expr.value));
                     return lowerReturnValue(ret);
                 }
                 case 'Binary': {
-                    const lhsTy = exprTy(expr.lhs);
+                    const lhsTy = exprTyNoCoercions(expr.lhs);
                     const lhs = asValue(lowerExpr(expr.lhs), lhsTy);
-                    const rhs = asValue(lowerExpr(expr.rhs), exprTy(expr.rhs));
+                    const rhs = asValue(lowerExpr(expr.rhs), exprTyNoCoercions(expr.rhs));
                     switch (expr.op) {
                         case TokenType.AndAnd:
                         case TokenType.OrOr: {
@@ -332,21 +335,21 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             return { type: 'Local', value: copyRes };
                         }
                         default: {
-                            const res = addLocal(exprTy(expr), true);
+                            const res = addLocal(exprTyNoCoercions(expr), true);
                             block.stmts.push({ type: 'BinOp', assignee: res, lhs, lhsTy, rhs, op: expr.op });
                             return { type: 'Local', value: res };
                         }
                     }
                 }
                 case 'Unary': {
-                    const rhs = asValue(lowerExpr(expr.rhs), exprTy(expr.rhs));
-                    const res = addLocal(exprTy(expr), true);
+                    const rhs = asValue(lowerExpr(expr.rhs), exprTyNoCoercions(expr.rhs));
+                    const res = addLocal(exprTyNoCoercions(expr), true);
                     block.stmts.push({ type: 'Unary', assignee: res, rhs, op: expr.op });
                     return { type: 'Local', value: res };
                 }
                 case 'AddrOf': {
                     const pointee = requireAsPlace(lowerExpr(expr.pointee));
-                    const res = addLocal(exprTy(expr), true);
+                    const res = addLocal(exprTyNoCoercions(expr), true);
                     block.stmts.push({ type: 'AddrOf', assignee: res, place: pointee });
                     return { type: 'Local', value: res };
                 }
@@ -355,7 +358,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                         case TokenType.Assign: {
                             let assignee = requireAsPlace(lowerExpr(expr.target));
 
-                            const value = asValue(lowerExpr(expr.value), exprTy(expr.value));
+                            const value = asValue(lowerExpr(expr.value), exprTyNoCoercions(expr.value));
                             block.stmts.push({
                                 type: 'Assignment',
                                 assignee,
@@ -373,11 +376,11 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             //   _val = *_place
                             //   _res = _val + 2
                             //   *_place = _res
-                            const rhsTy = exprTy(expr.value);
+                            const rhsTy = exprTyNoCoercions(expr.value);
                             const val = asValue(lowerExpr(expr.value), rhsTy);
                             const target = lowerExpr(expr.target);
                             const targetPlace = requireAsPlace(target);
-                            const targetVal = asValue(target, exprTy(expr.target));
+                            const targetVal = asValue(target, exprTyNoCoercions(expr.target));
                             const binOpRes = addLocal(rhsTy, true);
 
                             let op: BinaryOp;
@@ -452,7 +455,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     }
                     const res = addLocal(sig.ret, true);
 
-                    const callArgs = expr.args.map(v => asValue(lowerExpr(v), exprTy(v)));
+                    const callArgs = expr.args.map(v => asValue(lowerExpr(v), exprTyNoCoercions(v)));
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
@@ -472,13 +475,13 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 case 'Index': {
                     const target = requireAsPlace(lowerExpr(expr.target));
-                    const index = asValue(lowerExpr(expr.index), exprTy(expr.index));
+                    const index = asValue(lowerExpr(expr.index), exprTyNoCoercions(expr.index));
                     target.projections.push({ type: 'Index', index });
                     return target;
                 }
                 case 'ArrayLiteral':
                 case 'ArrayRepeat': {
-                    const ty = exprTy(expr);
+                    const ty = exprTyNoCoercions(expr);
                     if (ty.type !== 'Array') {
                         bug(expr.span, 'array literal did not produce array type');
                     }
@@ -489,7 +492,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             assignee,
                             type: 'InitArrayLit',
                             ty,
-                            values: expr.elements.map(e => asValue(lowerExpr(e), exprTy(e)))
+                            values: expr.elements.map(e => asValue(lowerExpr(e), exprTyNoCoercions(e)))
                         });
                     } else {
                         block.stmts.push({
@@ -497,14 +500,14 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             type: 'InitArrayRepeat',
                             ty,
                             count: expr.count,
-                            value: asValue(lowerExpr(expr.element), exprTy(expr.element))
+                            value: asValue(lowerExpr(expr.element), exprTyNoCoercions(expr.element))
                         });
                     }
                     return { type: 'Local', value: assignee };
                 }
                 case 'Record': {
                     const fields: RecordFields<MirValue> = expr.fields.map(([key, expr]) => {
-                        return [key, asValue(lowerExpr(expr), exprTy(expr))];
+                        return [key, asValue(lowerExpr(expr), exprTyNoCoercions(expr))];
                     });
                     return {
                         type: 'Record',
@@ -517,7 +520,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     const thenBlock = addBlock();
                     const elseBlock = expr.else ? addBlock() : null;
                     const joinedBlock = addBlock();
-                    const ty = exprTy(expr);
+                    const ty = exprTyNoCoercions(expr);
                     const res: MirPlace | null = expr.then.tailExpr ? { base: addLocal(ty, false), projections: [] } : null;
                     block.terminator = { type: 'Conditional', then: thenBlock, else: elseBlock ?? joinedBlock, condition };
 
@@ -587,7 +590,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                 }
                 case 'Tuple': {
                     const elements: MirValue[] = expr.elements.map(expr => {
-                        return asValue(lowerExpr(expr), exprTy(expr));
+                        return asValue(lowerExpr(expr), exprTyNoCoercions(expr));
                     });
                     return { type: 'Tuple', value: elements };
                 }
@@ -650,11 +653,11 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     // In body branches, we begin by extracting bindings out of patterns and then execute normal code. At the end, we always jump to a joined block.
                     const bodyBranches = expr.arms.map(() => addBlock());
                     const joinBlock = addBlock();
-                    const matchTy = exprTy(expr);
+                    const matchTy = exprTyNoCoercions(expr);
                     const resPlace: MirPlace | null = isUnit(matchTy) ? null : { base: addLocal(matchTy, false), projections: [] };
 
                     const scrutinee = lowerExpr(expr.scrutinee);
-                    const scrutineeTy = exprTy(expr.scrutinee);
+                    const scrutineeTy = exprTyNoCoercions(expr.scrutinee);
                     block.terminator = {
                         type: 'Jump',
                         target: checkBranches[0]
@@ -740,7 +743,7 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                                 break;
                             }
                         }
-                        const bodyValue = asValue(lowerExpr(arm.body), exprTy(arm.body));
+                        const bodyValue = asValue(lowerExpr(arm.body), exprTyNoCoercions(arm.body));
                         if (resPlace) {
                             block.stmts.push({
                                 type: 'Assignment',
@@ -772,19 +775,19 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                     if (expr.deref) {
                         const recvPlace = requireAsPlace(lowerExpr(expr.target));
                         recvPlace.projections.push({ type: 'Deref' });
-                        const ptrTy = exprTy(expr.target);
+                        const ptrTy = exprTyNoCoercions(expr.target);
                         if (ptrTy.type !== 'Pointer') {
                             bug(expr.span, 'method call deref must be a pointer');
                         }
                         receiver = asValue(recvPlace, ptrTy.pointee);
                     } else {
-                        receiver = asValue(lowerExpr(expr.target), exprTy(expr.target));
+                        receiver = asValue(lowerExpr(expr.target), exprTyNoCoercions(expr.target));
                     }
                     const method = typeck.selectedMethods.get(expr)!;
 
                     const res = addLocal(sig.ret, true);
 
-                    const callArgs = [receiver, ...expr.args.map(v => asValue(lowerExpr(v), exprTy(v)))];
+                    const callArgs = [receiver, ...expr.args.map(v => asValue(lowerExpr(v), exprTyNoCoercions(v)))];
 
                     const targetBlock = blocks.length;
                     blocks.push({ stmts: [], terminator: null });
@@ -812,6 +815,17 @@ export function astToMir(src: string, mangledName: string, decl: FnDecl, args: T
                             block.stmts.push({ type: 'AddrOf', assignee: borrowLocal, place });
                             return { type: 'Local', value: borrowLocal };
                         }
+                        case 'UnsizeArray': {
+                            const ty = typeck.exprTys.get(expr)!;
+                            if (ty.type !== 'Pointer' || ty.pointee.type !== 'Array') {
+                                spanless_bug('UnsizeArray operand must be an array pointer');
+                            }
+                            const coercee = asValue(res, ty);
+                            const coercedLocal = addLocal(coercion.to, true);
+                            block.stmts.push({ type: 'UnsizeArray', assignee: coercedLocal, base: coercee, len: ty.pointee.len, slicePtrTy: coercion.to });
+                            return { type: 'Local', value: coercedLocal };
+                        }
+                        default: assertUnreachable(coercion);
                     }
                 }
             }

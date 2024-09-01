@@ -1,5 +1,5 @@
 type error: i64 is not assignable to i32
- -> let.chg:10:4
+ -> let.chg:10:17
 
     let y: i32 = 1i64;
-    ^^^^^^^^^^^^^^^^^^
+                 ^

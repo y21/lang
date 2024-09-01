@@ -20,6 +20,8 @@ export function mangleTy(ty: Ty): string {
             return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'Array':
             return `$array$${ty.len}$${mangleTy(ty.elemTy)}`;
+        case 'Slice':
+            return `$slice$${mangleTy(ty.elemTy)}`;
         case 'TyParam':
         case 'TyVid':
         case 'FnDef':

@@ -10,8 +10,7 @@ import { visitInStmt } from "./visit";
 import { bug, err, emitErrorRaw as error, spanless_bug, Suggestion } from './error';
 
 type ConstraintType = { type: 'SubtypeOf', sub: Ty, sup: Ty }
-type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock'
-    | { type: 'MethodCallReceiver', expr: Expr };
+type ConstraintCause = 'Binary' | 'Assignment' | 'Return' | 'ArrayLiteral' | 'Index' | 'FnArgument' | 'UseInCondition' | 'Unary' | 'Pattern' | 'JoinBlock' | 'MethodCallReceiver';
 type Constraint = { cause: ConstraintCause, at: Span, depth: number } & ConstraintType;
 const MAX_CONSTRAINT_DEPTH = 200;
 
@@ -119,15 +118,37 @@ class Infcx {
     constraints: Constraint[] = [];
     fnStack: FnLocalState[] = [];
     exprTys = new Map<Expr, Ty>();
+    // Used for coercions
+    constraintToExpr: Map<Constraint, Expr> = new Map();
 
     constructor() { }
 
-    sub(cause: ConstraintCause, at: Span, sub: Ty, sup: Ty) {
-        this.constraints.push({ type: 'SubtypeOf', at, cause, sub, sup, depth: 0 });
+    // Require `sub` to be a subtype of `sup` but disallow coercing it.
+    // You should only really use it when you don't have an expression. Otherwise use `subCoerce`
+    subNoCoerce(cause: ConstraintCause, at: Span, sub: Ty, sup: Ty) {
+        const constraint: Constraint = { type: 'SubtypeOf', at, cause, sub, sup, depth: 0 };
+        this.constraints.push(constraint);
+    }
+    // Prefer using this over `subNoCoerce` when possible.
+    subCoerce(cause: ConstraintCause, expr: Expr, sub: Ty, sup: Ty) {
+        const constraint: Constraint = { type: 'SubtypeOf', at: expr.span, cause, sub, sup, depth: 0 };
+        this.constraintToExpr.set(constraint, expr);
+        this.constraints.push(constraint);
     }
 
-    nestedSub(parent: Constraint, sub: Ty, sup: Ty, at?: Span) {
+    nestedSubNoCoerce(parent: Constraint, sub: Ty, sup: Ty, at?: Span) {
         this.constraints.push({ type: 'SubtypeOf', at: at || parent.at, cause: parent.cause, depth: parent.depth + 1, sub, sup });
+    }
+
+    // You should call this if the nested constraint has an associated expression and the nested constraint
+    // still essentially represents the same expression.
+    nestedSubCoerce(parent: Constraint, sub: Ty, sup: Ty, at?: Span) {
+        const constraint: Constraint = { type: 'SubtypeOf', at: at || parent.at, cause: parent.cause, depth: parent.depth + 1, sub, sup };
+        this.constraints.push(constraint);
+        let parentExpr: Expr | undefined;
+        if (parentExpr = this.constraintToExpr.get(parent)) {
+            this.constraintToExpr.set(constraint, parentExpr);
+        }
     }
 
     mkTyVar(origin: TyVarOrigin): Ty {
@@ -149,11 +170,11 @@ class Infcx {
         }
     }
 
-    registerReturn(at: Span, ty: Ty) {
+    registerReturn(expr: Expr, ty: Ty) {
         const fs = this.fnStack[this.fnStack.length - 1];
         fs.returnFound = true;
         const sup = fs.expectedReturnTy;
-        this.sub('Return', at, ty, sup);
+        this.subCoerce('Return', expr, ty, sup);
     }
 
     tryResolve(ty: Ty): Ty {
@@ -166,6 +187,14 @@ class Infcx {
     whereClause(): LoweredWhereClause {
         return expectLast(this.fnStack).whereClause;
     }
+
+    expectConstraintExpr(c: Constraint): Expr {
+        const e = this.constraintToExpr.get(c);
+        if (!e) {
+            spanless_bug(`expected constraint ${inspect(c)} to have an associated expr but it did not`)
+        }
+        return e;
+    }
 }
 
 export function returnTy(sig: AstFnSignature, typeck: TypeckResults): Ty {
@@ -175,6 +204,9 @@ export function returnTy(sig: AstFnSignature, typeck: TypeckResults): Ty {
 export type Coercion = {
     type: 'Autoref',
     to: Ty
+} | {
+    type: 'UnsizeArray',
+    to: { type: 'Pointer', pointee: { type: 'Slice' } } & Ty
 };
 
 export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResults {
@@ -264,6 +296,10 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     const elemTy = lowerTy(ty.elemTy);
                     return { type: 'Array', flags: elemTy.flags, elemTy, len: ty.len };
                 }
+                case 'Slice': {
+                    const elemTy = lowerTy(ty.elemTy);
+                    return { type: 'Slice', flags: elemTy.flags, elemTy };
+                }
                 case 'Pointer': {
                     const pointee = lowerTy(ty.pointeeTy);
                     return { type: 'Pointer', flags: pointee.flags, mtb: ty.mtb, pointee };
@@ -336,7 +372,13 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                 const rety = stmt.init === null ? infcx.mkTyVar({ type: 'Let', span: stmt.span }) : typeckExpr(stmt.init);
                 if (stmt.ty) {
                     const annotatedTy = lowerTy(stmt.ty);
-                    infcx.sub('Assignment', stmt.span, rety, annotatedTy);
+
+                    if (stmt.init) {
+                        infcx.subCoerce('Assignment', stmt.init, rety, annotatedTy);
+                    } else {
+                        infcx.subNoCoerce('Assignment', stmt.span, rety, annotatedTy);
+                    }
+
                     // this isn't more wrong than using `rety`, but allows some additional cases to typeck:
                     // let x: {x:i32} = bitcast(1);
                     // x.x;
@@ -527,7 +569,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                 }
                 case 'Return': {
                     const ret = typeckExpr(expr.value);
-                    infcx.registerReturn(expr.span, ret);
+                    infcx.registerReturn(expr, ret);
                     return { type: 'never', flags: EMPTY_FLAGS };
                 }
                 case 'ArrayLiteral': {
@@ -536,7 +578,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         elemTy = infcx.mkTyVar({ type: "Expr", expr });
                     } else {
                         elemTy = typeckExpr(expr.elements[0]);
-                        for (let i = 1; i < expr.elements.length; i++) infcx.sub('ArrayLiteral', expr.elements[i].span, typeckExpr(expr.elements[i]), elemTy);
+                        for (let i = 1; i < expr.elements.length; i++) infcx.subCoerce('ArrayLiteral', expr.elements[i], typeckExpr(expr.elements[i]), elemTy);
                     }
                     return { type: 'Array', flags: elemTy.flags, elemTy, len: expr.elements.length };
                 }
@@ -545,11 +587,11 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     return { type: 'Array', elemTy, flags: elemTy.flags, len: expr.count };
                 }
                 case 'Assignment': {
-                    infcx.sub('Assignment', expr.span, typeckExpr(expr.value), typeckExpr(expr.target));
+                    infcx.subCoerce('Assignment', expr.value, typeckExpr(expr.value), typeckExpr(expr.target));
                     return UNIT;
                 }
                 case 'Index': {
-                    infcx.sub('Index', expr.span, typeckExpr(expr.index), U64);
+                    infcx.subCoerce('Index', expr.index, typeckExpr(expr.index), U64);
                     const target = typeckExpr(expr.target);
                     if (target.type === 'Array') {
                         return target.elemTy;
@@ -603,8 +645,8 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                             break;
                         default: assertUnreachable(expr);
                     }
-                    infcx.sub('Binary', expr.lhs.span, lhsTy, expectedLhsTy);
-                    infcx.sub('Binary', expr.rhs.span, rhsTy, expectedRhsTy);
+                    infcx.subCoerce('Binary', expr.lhs, lhsTy, expectedLhsTy);
+                    infcx.subCoerce('Binary', expr.rhs, rhsTy, expectedRhsTy);
                     return resultTy;
                 }
                 case 'AddrOf': {
@@ -684,7 +726,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     }
 
                     for (let i = 0; i < gotCount; i++) {
-                        infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i]);
+                        infcx.subCoerce('FnArgument', expr.args[i], typeckExpr(expr.args[i]), sig.parameters[i]);
                     }
 
                     return sig.ret;
@@ -725,19 +767,19 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                     }
                 }
                 case 'If': {
-                    infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
+                    infcx.subCoerce('UseInCondition', expr.condition, typeckExpr(expr.condition), BOOL);
                     const thenTy = typeckExpr(expr.then);
                     if (expr.else) {
                         const elseTy = typeckExpr(expr.else);
-                        infcx.sub('JoinBlock', expr.span, thenTy, elseTy);
+                        infcx.subCoerce('JoinBlock', expr.then, thenTy, elseTy);
                         return thenTy;
                     } else {
-                        infcx.sub('JoinBlock', expr.span, thenTy, UNIT);
+                        infcx.subCoerce('JoinBlock', expr.then, thenTy, UNIT);
                         return UNIT;
                     }
                 }
                 case 'While':
-                    infcx.sub('UseInCondition', expr.condition.span, typeckExpr(expr.condition), BOOL);
+                    infcx.subCoerce('UseInCondition', expr.condition, typeckExpr(expr.condition), BOOL);
                     typeckExpr(expr.body);
                     return UNIT;
                 case 'Unary': {
@@ -751,7 +793,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         case TokenType.Minus: expectedTy = rhsTy; resultTy = rhsTy; break;
                     }
 
-                    infcx.sub('Unary', expr.rhs.span, rhsTy, expectedTy);
+                    infcx.subCoerce('Unary', expr.rhs, rhsTy, expectedTy);
                     return resultTy;
                 }
                 case 'Tuple': {
@@ -774,11 +816,11 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         const patTy = typeckPat(arm.pat);
                         const bodyTy = typeckExpr(arm.body);
                         if (armTy) {
-                            infcx.sub('JoinBlock', arm.body.span, bodyTy, armTy)
+                            infcx.subCoerce('JoinBlock', arm.body, bodyTy, armTy)
                         } else {
                             armTy = bodyTy;
                         }
-                        infcx.sub('Pattern', expr.span, patTy, scrutineeTy);
+                        infcx.subNoCoerce('Pattern', expr.span, patTy, scrutineeTy);
                     }
                     return armTy || NEVER;
                 }
@@ -798,7 +840,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         err(
                             expr.span,
                             `method '${expr.path.ident}' not found on ${ppTy(derefTargetTy)}`,
-                            !hasReceiver ? 'this function exists on the type but it has no `self` receiver' : undefined
+                            methodLookupResult && !hasReceiver ? 'this function exists on the type but it has no `self` receiver' : undefined
                         );
                     }
                     const { value: selectedMethod } = methodLookupResult;
@@ -867,10 +909,10 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                         err(expr.span, `argument length mismatch (${expr.args.length} != ${sig.parameters.length - 1})`);
                     }
 
-                    infcx.sub({ type: 'MethodCallReceiver', expr: expr.target }, expr.target.span, targetTy, sig.parameters[0]);
+                    infcx.subCoerce('MethodCallReceiver', expr.target, targetTy, sig.parameters[0]);
                     for (let i = 0; i < sig.parameters.length - 1; i++) {
                         // Relate our args with the instantiated signature.
-                        infcx.sub('FnArgument', expr.args[i].span, typeckExpr(expr.args[i]), sig.parameters[i + 1]);
+                        infcx.subCoerce('FnArgument', expr.args[i], typeckExpr(expr.args[i]), sig.parameters[i + 1]);
                     }
 
                     return sig.ret;
@@ -901,6 +943,28 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
             tyvar.constrainedTy = ty;
             for (const constraint of tyvar.delayedConstraints) infcx.constraints.push(constraint);
         };
+
+        const tryCoerce = (ct: Constraint, coercion: Coercion) => {
+            let expr: Expr | undefined;
+            if ((expr = infcx.constraintToExpr.get(ct))) {
+                addCoercion(expr, coercion);
+            } else {
+                reportTypeMismatch(ct, ct.sup, ct.sub, `${ppTy(ct.sub)} can coerce to ${ppTy(ct.sup)}, but only in expressions`);
+            }
+        };
+
+        function reportTypeMismatch(constraint: Constraint, expect: Ty, got: Ty, note?: string) {
+            let message: string;
+            switch (constraint.cause) {
+                case 'Binary':
+                    message = `left-hand side and right-hand side must be of the same type, got ${got.type} and ${expect.type}`;
+                    break;
+                default: message = `${ppTy(got)} is not assignable to ${ppTy(expect)}`;
+            }
+
+            error(sm, constraint.at, `type error: ${message}`, note);
+            errors = true;
+        }
 
         function lubStep() {
             while (infcx.constraints.length > 0) {
@@ -940,7 +1004,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                                 if (subf[0] !== supf[0]) {
                                     error(sm, constraint.at, `type error: field '${subf[0]}' not present at index ${i} in ${ppTy(sup)}`);
                                 } else {
-                                    infcx.nestedSub(parent, subf[1], supf[1]);
+                                    infcx.nestedSubNoCoerce(parent, subf[1], supf[1]);
                                 }
                             }
                         }
@@ -969,16 +1033,25 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                                     for (let i = 0; i < sub.elements.length; i++) {
                                         const subf = sub.elements[i];
                                         const supf = sup.elements[i];
-                                        infcx.nestedSub(constraint, subf, supf);
+                                        infcx.nestedSubNoCoerce(constraint, subf, supf);
                                     }
                                 }
                             } else if (sub.type === 'Array' && sup.type === 'Array') {
                                 if (sub.len !== sup.len) {
                                     error(sm, constraint.at, `type error: array length mismatch (${sub.len} != ${sup.len})`);
                                 }
-                                infcx.nestedSub(constraint, sub.elemTy, sup.elemTy);
+                                infcx.nestedSubNoCoerce(constraint, sub.elemTy, sup.elemTy);
+                            } else if (sub.type === 'Slice' && sup.type === 'Slice') {
+                                infcx.nestedSubNoCoerce(constraint, sub.elemTy, sup.elemTy);
                             } else if (sub.type === 'Pointer' && sup.type === 'Pointer') {
-                                infcx.nestedSub(constraint, sub.pointee, sup.pointee);
+                                if (sub.pointee.type === 'Array' && sup.pointee.type === 'Slice' && sub.mtb === sup.mtb) {
+                                    // Arrays can coerce to slices
+                                    tryCoerce(constraint, { type: 'UnsizeArray', to: sup as Ty & { type: 'Pointer', pointee: { type: 'Slice' } } });
+
+                                    infcx.nestedSubNoCoerce(constraint, sub.pointee.elemTy, sup.pointee.elemTy);
+                                } else {
+                                    infcx.nestedSubNoCoerce(constraint, sub.pointee, sup.pointee);
+                                }
                             } else if (sub.type === 'Record' && sup.type === 'Alias') {
                                 // TODO: also check args
                                 const nsup = normalize(sup);
@@ -995,9 +1068,9 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                                 }
                             } else if (sub.type === 'Alias' && sup.type === 'Alias') {
                                 // TODO: check constructibleIn for both aliases
-                                infcx.nestedSub(constraint, normalize(sub), normalize(sup));
+                                infcx.nestedSubCoerce(constraint, normalize(sub), normalize(sup));
                             } else if (sub.type === 'Alias') {
-                                infcx.nestedSub(constraint, normalize(sub), normalize(sup));
+                                infcx.nestedSubCoerce(constraint, normalize(sub), normalize(sup));
                             } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                                 let tyvid: { type: 'TyVid' } & Ty;
                                 let other: Ty;
@@ -1027,24 +1100,15 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                                 infcx.tyVars[sup.id].delayedConstraints.push(constraint);
                             } else if (sub.type === 'never') {
                                 // OK. Never is a subtype of all types.
-                            } else if (sup.type === 'Pointer' && sub.type !== 'Pointer' && typeof constraint.cause === 'object' && constraint.cause.type === 'MethodCallReceiver') {
+                            } else if (sup.type === 'Pointer' && sub.type !== 'Pointer' && constraint.cause === 'MethodCallReceiver') {
                                 // `T* == T` in a method call receiver: try to autoref
                                 const coercedTy: Ty = { type: 'Pointer', pointee: sub, flags: sub.flags, mtb: sup.mtb };
-                                addCoercion(constraint.cause.expr, { type: 'Autoref', to: coercedTy });
-                                infcx.nestedSub(constraint, sup, coercedTy);
+                                addCoercion(infcx.expectConstraintExpr(constraint), { type: 'Autoref', to: coercedTy });
+                                infcx.nestedSubNoCoerce(constraint, sup, coercedTy);
                             } else {
                                 // Error case.
 
-                                let message: string;
-                                switch (constraint.cause) {
-                                    case 'Binary':
-                                        message = `left-hand side and right-hand side must be of the same type, got ${sub.type} and ${sup.type}`;
-                                        break;
-                                    default: message = `${ppTy(sub)} is not assignable to ${ppTy(sup)}`;
-                                }
-
-                                error(sm, constraint.at, `type error: ${message}`);
-                                errors = true;
+                                reportTypeMismatch(constraint, sup, sub);
                             }
                             break;
                         default: assertUnreachable(constraint.type)
@@ -1133,7 +1197,8 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                 const { flags, instantiated: args } = instantiateMany(ty.args);
                 return { ...ty, flags, args };
             }
-            case 'Array': {
+            case 'Array':
+            case 'Slice': {
                 const elemTy = instantiateTyVars(ty.elemTy);
                 return { ...ty, flags: elemTy.flags, elemTy };
             }

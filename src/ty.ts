@@ -14,6 +14,7 @@ export type Ty = ({ flags: TypeFlags }) & ({ type: 'TyVid', id: number }
     | { type: 'int', value: IntTy }
     | { type: 'str' }
     | { type: 'Array', elemTy: Ty, len: number }
+    | { type: 'Slice', elemTy: Ty }
     | { type: 'TyParam', id: number, parentItem: FnDecl | TyAliasDecl | ExternFnDecl | Impl | Trait }
     | { type: 'FnDef', decl: FnDecl, args: Ty[] }
     | { type: 'TraitFn', value: TraitFn, args: Ty[] }
@@ -81,6 +82,8 @@ export function ppTy(ty: Ty): string {
             return ty.type;
         case 'Array':
             return `${ppTy(ty.elemTy)}[${ty.len}]`;
+        case 'Slice':
+            return `${ppTy(ty.elemTy)}[]`;
         case 'Pointer':
             return `${ppTy(ty.pointee)}*`
         case 'TyParam': return genericsOfDecl(ty.parentItem)[ty.id];
@@ -139,8 +142,9 @@ export function instantiateTy(ty: Ty, args: Ty[]): Ty {
         case 'TyParam':
             assert(ty.id < args.length, 'type parameter index out of bounds');
             return args[ty.id];
-        case 'Array': {
-            const elemTy = instantiateTy(ty, args);
+        case 'Array':
+        case 'Slice': {
+            const elemTy = instantiateTy(ty.elemTy, args);
             return { ...ty, flags: elemTy.flags, elemTy };
         }
         case 'FnDef':
@@ -244,6 +248,8 @@ export function eqTy(lty: Ty, rty: Ty, tyc: TyParamCheck): boolean {
         return true;
     } else if (lty.type === 'Pointer' && rty.type === 'Pointer') {
         return lty.mtb === rty.mtb && eqTy(lty.pointee, rty.pointee, tyc);
+    } else if (lty.type === 'Slice' && rty.type === 'Slice') {
+        return eqTy(lty.elemTy, rty.elemTy, tyc);
     } else {
         return false;
     }
