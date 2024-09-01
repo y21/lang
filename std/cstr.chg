@@ -6,12 +6,13 @@ type CString = Vec<i8>;
 
 impl CString {
   fn from_str(s: str*): Self {
-    let repr = StrRepr::from(s);
+    let ptr = s.as_ptr();
+    let len = s.len();
     let i = 0u64;
     let data = Vec::new();
 
-    while i < repr.len {
-      data.push(*ptr::add(ptr::cast::<u8, i8>(repr.ptr), i));
+    while i < len {
+      data.push(*ptr::add(ptr::cast::<u8, i8>(ptr), i));
       i += 1;
     }
     data.push(0);

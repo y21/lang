@@ -5,55 +5,55 @@ use root::std::fmt::Display;
 use root::std::string::String;
 use root::std::libc::memcpy;
 
-type StrRepr = { ptr: u8*, len: u64 };
-
-impl StrRepr {
-  fn from(s: str*): StrRepr {
-    return bitcast(s);
+type StrRepr = root::std::slice::Repr<u8>;
+impl str {
+  fn from_raw_parts(ptr: u8*, len: u64): str* {
+    return bitcast(.{ ptr: ptr, len: len });
   }
-  fn to_str(self): str* {
-    return bitcast(self);
+
+  fn as_ptr(self*): u8* {
+    let repr: StrRepr = bitcast(self);
+    return repr.ptr;
   }
-}
 
-fn str_len(s: str*): u64 {
-  return StrRepr::from(s).len;
-}
-
-fn str_is_empty(s: str*): bool {
-  return str_len(s) != 0;
-}
-
-fn byte_at(s: str*, pos: u64): u8 {
-  let parts = StrRepr::from(s);
-  if pos >= parts.len {
-    fatal("string index out of bounds");
+  fn len(self*): u64 {
+    let repr: StrRepr = bitcast(self);
+    return repr.len;
   }
-  return *ptr::add(parts.ptr, pos);
-}
 
-fn substr_from(s: str*, from: u64): str* {
-  let repr = StrRepr::from(s);
-  if from > repr.len {
-    fatal("string out of bounds");
+  fn is_empty(self*): bool {
+    return self.len() == 0;
   }
-  return StrRepr::to_str(.{ ptr: ptr::add(repr.ptr, from), len: repr.len - from });
-}
 
-fn substr_to(s: str*, to: u64): str* {
-  let repr = StrRepr::from(s);
-  if to >= repr.len {
-    fatal("string out of bounds");
+  fn at(self*, index: u64): u8 {
+    if index >= self.len() {
+      fatal("string index out of bounds");
+    }
+    return *ptr::add(self.as_ptr(), index);
   }
-  return StrRepr::to_str(.{ ptr: repr.ptr, len: to });
+  
+  fn substr_from(self*, from: u64): str* {
+    if from > self.len() {
+      fatal("string index out of bounds");
+    }
+    let repr: StrRepr = .{ ptr: ptr::add(self.as_ptr() from), len: self.len() - from };
+    return bitcast(repr);
+  }
+
+  fn substr_to(self*, to: u64): str* {
+    if to >= self.len() {
+      fatal("string index out of bounds");
+    }
+    let repr: StrRepr = .{ ptr: self.as_ptr(), len: to };
+    return bitcast(repr);
+  }
 }
 
 impl Display for str {
   fn to_string(self*): String {
-    let repr = StrRepr::from(self);
-    let out = String::with_capacity(repr.len);
-    memcpy(ptr::cast::<u8, ()>(out.ptr), ptr::cast::<u8, ()>(repr.ptr), repr.len);
-    out.len = repr.len;
+    let out = String::with_capacity(self.len());
+    memcpy(ptr::cast::<u8, ()>(out.ptr), ptr::cast::<u8, ()>(self.as_ptr()), self.len());
+    out.len = self.len();
     return out;
   }
 }

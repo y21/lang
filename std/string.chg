@@ -19,11 +19,7 @@ impl String {
     }
 
     fn as_str(self*): str* {
-        return self.to_str_repr().to_str();
-    }
-
-    fn to_str_repr(self*): StrRepr {
-        return .{ ptr: self*.ptr, len: self*.len };
+        return str::from_raw_parts(self*.ptr, self*.len);
     }
 
     fn len(self*): u64 {
@@ -36,14 +32,11 @@ impl String {
 }
 
 fn str_concat(s1: str*, s2: str*): String {
-  let s1r = StrRepr::from(s1);
-  let s2r = StrRepr::from(s2);
+  let res = Vec::with_capacity(s1.len() + s2.len());
 
-  let res = Vec::with_capacity(s1r.len + s2r.len);
-
-  memcpy(ptr::cast::<u8, ()>(res.ptr), ptr::cast::<u8, ()>(s1r.ptr), s1r.len);
-  memcpy(ptr::cast::<u8, ()>(ptr::add(res.ptr, s1r.len)), ptr::cast::<u8, ()>(s2r.ptr), s2r.len);
-  res.len = s1r.len + s2r.len;
+  memcpy(ptr::cast::<u8, ()>(res.ptr), ptr::cast::<u8, ()>(s1.as_ptr()), s1.len());
+  memcpy(ptr::cast::<u8, ()>(ptr::add(res.ptr, s1.len())), ptr::cast::<u8, ()>(s2.as_ptr()), s2.len());
+  res.len = s1.len() + s2.len();
 
   return res;
 }

@@ -9,14 +9,15 @@ mod cstr;
 mod string;
 mod int;
 mod fs;
+mod slice;
 
 fn print<T>(s: T)
 where
     T: fmt::Display
 {
     let string = T::to_string(&s);
-    let parts = str::StrRepr::from(string.as_str());
-    libc::write(1, ptr::cast(parts.ptr), parts.len);
+    let string = string.as_str();
+    libc::write(1, ptr::cast(string.as_ptr()), string.len());
 }
 
 fn println<T>(s: T)
