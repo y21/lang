@@ -20,6 +20,7 @@ import { Ty, normalize, UNIT, isUnit } from "./ty";
 import { TypeckResults, returnTy } from "./typeck";
 import { todo, assertUnreachable } from "./util";
 import { spanless_bug } from "./error";
+import path from "path";
 
 export function codegen(src: string, res: Resolutions, typeck: TypeckResults): string {
     const _codegenCache = new Set<string>();
@@ -33,7 +34,7 @@ export function codegen(src: string, res: Resolutions, typeck: TypeckResults): s
     };
     const builtinFns = {
         strStartsWith: () => {
-            addExternDecl('$builtins$starts_with', () => readFileSync('src/builtins/startsWith.ll', 'utf-8'));
+            addExternDecl('$builtins$starts_with', () => readFileSync(path.join(__dirname, '../src/builtins/startsWith.ll'), 'utf-8'));
             return '$builtins$starts_with';
         }
     };
