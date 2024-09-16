@@ -23,6 +23,7 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
 
         switch (src[i]) {
             case ' ':
+            case '\r':
             case '\n':
                 break;
             case '(': tokens.push({ span: [start, i + 1], ty: TokenType.LParen }); break;

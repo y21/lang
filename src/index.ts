@@ -9,6 +9,7 @@ import { addFileToSourceMap, createSourceMap, ppSpan } from './span';
 import { ppTy } from './ty';
 import { codegen } from './llvm';
 import path from 'path';
+import os from 'os';
 import { Bug, DiagError, emitErrorRaw } from './error';
 
 function timed<T>(what: string, f: () => T): T {
@@ -43,7 +44,7 @@ function timed<T>(what: string, f: () => T): T {
         if (options.printLlirOnly) {
             console.log(llir);
         } else {
-            const llpath = `/tmp/tmpir${Date.now()}.ll`;
+            const llpath = path.join(os.tmpdir(), `tmpir${Date.now}.ll`);
             fs.writeFileSync(llpath, llir);
             // TODO: don't use -Wno-override-module
             timed('clang', () => cProcess.spawnSync(`clang ${options.optLevel} -Wno-override-module ${llpath}`, {
