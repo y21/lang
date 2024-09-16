@@ -44,7 +44,7 @@ function timed<T>(what: string, f: () => T): T {
         if (options.printLlirOnly) {
             console.log(llir);
         } else {
-            const llpath = path.join(os.tmpdir(), `tmpir${Date.now}.ll`);
+            const llpath = path.join(os.tmpdir(), `tmpir${Date.now()}.ll`);
             fs.writeFileSync(llpath, llir);
             // TODO: don't use -Wno-override-module
             timed('clang', () => cProcess.spawnSync(`clang ${options.optLevel} -Wno-override-module ${llpath}`, {
