@@ -29,6 +29,20 @@ impl String {
     fn push_byte(self*, b: u8) {
         Vec::push(self, b);
     }
+    
+    fn from_str(s: str*): Self {
+        let res = String::with_capacity(s.len());
+        memcpy(ptr::cast(res.ptr), ptr::cast(s.as_ptr()), s.len());
+        res.len = s.len();
+        return res;
+    }
+    
+    fn extend(self*, other: str*) {
+        let i = 0;
+        while i < other*.len() {
+            self*.push_byte(other.at(i));
+        }
+    }
 }
 
 fn str_concat(s1: str*, s2: str*): String {

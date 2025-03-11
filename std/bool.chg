@@ -1,0 +1,8 @@
+use root::std::fmt::Display;
+use root::std::string::String;
+
+impl Display for bool {
+    fn to_string(self*): String {
+        return String::from_str(if *self { "true" } else { "false" });
+    }
+}

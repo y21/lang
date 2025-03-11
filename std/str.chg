@@ -36,7 +36,7 @@ impl str {
     if from > self.len() {
       fatal("string index out of bounds");
     }
-    let repr: StrRepr = .{ ptr: ptr::add(self.as_ptr() from), len: self.len() - from };
+    let repr: StrRepr = .{ ptr: ptr::add(self.as_ptr(), from), len: self.len() - from };
     return bitcast(repr);
   }
 
@@ -46,6 +46,17 @@ impl str {
     }
     let repr: StrRepr = .{ ptr: self.as_ptr(), len: to };
     return bitcast(repr);
+  }
+  
+  
+  fn index_of(self*, search: u8): u64 {
+    let i = 0;
+    while i < self.len() {
+        if self.at(i) == search {
+            return i;
+        }
+    }
+    return -1;
   }
 }
 
