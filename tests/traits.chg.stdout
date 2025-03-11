@@ -17,7 +17,14 @@ expr @ 28:12 28:13 => Foo<i32>
 expr @ 28:18 28:20 => i32
 expr @ 28:12 28:21 => i32
 expr @ 28:5 28:21 => never
-expr @ 23:16 30:1 => ()
+expr @ 29:38 29:45 => fn default(...)
+expr @ 29:38 29:47 => i32
+expr @ 29:23 29:49 => {x: i32}
+expr @ 30:5 30:10 => fn print(...)
+expr @ 30:11 30:12 => Foo<i32>
+expr @ 30:5 30:13 => ()
+expr @ 23:16 32:0 => ()
+expr @ 33:32 34:1 => ()
 
 
 
@@ -61,11 +68,23 @@ ret i32 %ret.0
 
 }
 
+define void @root$print$LT$$LB$x$$i32$RB$$LT$i32$RT$$GT$({i32} %lt.0) {
+prologue:
+%l.0 = alloca {i32}
+store {i32} %lt.0, {i32}* %l.0
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
 define i32 @main() {
 prologue:
 %l.0 = alloca i32
 %l.1 = alloca i32
 %l.5 = alloca {i32}
+%l.8 = alloca {i32}
 br label %bb.0
 
 bb.0:
@@ -97,6 +116,20 @@ bb.4:
 store i32 %l.7, i32* %l.0
 %ret.4 = load i32, i32* %l.0
 ret i32 %ret.4
+
+bb.5:
+%l.9 = call i32 @root$i32$$LB$0$RB$default$LT$i32$GT$()
+br label %bb.6
+
+bb.6:
+%t.5 = alloca {i32}
+%p.6 = getelementptr {i32}, {i32}* %t.5, i32 0, i32 0
+store i32 %l.9, i32* %p.6
+%t.7 = load {i32}, {i32}* %t.5
+store {i32} %t.7, {i32}* %l.8
+%l.11 = load {i32}, {i32}* %l.8
+%l.10 = call {} bitcast(void({i32})* @root$print$LT$$LB$x$$i32$RB$$LT$i32$RT$$GT$ to {}({i32})*)({i32} %l.11)
+br label %bb.7
 
 }
 

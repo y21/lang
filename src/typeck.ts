@@ -1069,7 +1069,7 @@ export function typeck(sm: SourceMap, ast: Module, res: Resolutions): TypeckResu
                             } else if (sub.type === 'Alias' && sup.type === 'Alias') {
                                 // TODO: check constructibleIn for both aliases
                                 infcx.nestedSubCoerce(constraint, normalize(sub), normalize(sup));
-                            } else if (sub.type === 'Alias') {
+                            } else if (sub.type === 'Alias' && sup.type !== 'TyVid') {
                                 infcx.nestedSubCoerce(constraint, normalize(sub), normalize(sup));
                             } else if ((sub.type === 'TyVid' && sup.type !== 'TyVid') || (sup.type === 'TyVid' && sub.type !== 'TyVid')) {
                                 let tyvid: { type: 'TyVid' } & Ty;

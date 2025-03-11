@@ -26,4 +26,8 @@ fn main(): i32 {
     return Default::default();
     let b: Foo<i32> = .{ x: 10 };
     return b.baz(55);
+    let x: Foo<i32> = .{ x: Default::default() };
+    print(x);
 }
+
+fn print<T>(x: T) where T: Bar {}
