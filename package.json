@@ -1,12 +1,12 @@
 {
-  "name": "lang",
+  "name": "charge",
   "version": "1.0.0",
   "description": "",
   "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "ui": "node dist/ui",
-    "uibless": "node dist/ui --bless"
+    "compile": "node .",
+    "build": "node_modules/typescript/bin/tsc",
+    "test": "node dist/ui"
   },
   "author": "",
   "license": "ISC",
