@@ -3,7 +3,7 @@
 ### Usage
 At this point the compiler is written in TypeScript (eventually it will be rewritten in this language and self-hosted).
 So you'll need node.js installed (and clang).
-Running `npm i --save-dev && npx tsc` will compile the compiler.
+Running `pnpm install && pnpm tsc` will compile the compiler.
 
 ```sh
 # it currently just reads the `input` file
