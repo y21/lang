@@ -9,13 +9,13 @@ jobs:
               with:
                 node-version: 20
             - name: Setup project
-              run: npm i --save-dev
+              run: pnpm install
             - name: Compile project
-              run: npx tsc
+              run: pnpm build
             - name: Run ui tests
-              run: node dist/ui
+              run: pnpm test
             - name: Build std
-              run: echo 'mod std; fn main() {}' > main.chg && node . main.chg
+              run: echo 'mod std; fn main() {}' > main.chg && pnpm compile main.chg
             - name: Build stage1 compiler
               working-directory: self
               run: node .. main.chg
