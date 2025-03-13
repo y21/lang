@@ -1,15 +1,16 @@
+mod bool;
+mod cstr;
+mod fmt;
+mod fs;
+mod int;
 mod intrinsics;
 mod libc;
 mod mem;
 mod ptr;
-mod str;
-mod vec;
-mod fmt;
-mod cstr;
-mod string;
-mod int;
-mod fs;
 mod slice;
+mod str;
+mod string;
+mod vec;
 
 fn print<T>(s: T)
 where

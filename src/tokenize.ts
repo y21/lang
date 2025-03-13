@@ -18,148 +18,156 @@ function isAlpha(c: string) {
 export function tokenize(sm: SourceMap, file: File): Token[] {
     const src = sm.source;
     const tokens: Token[] = [];
-    for (let i = file.startPos; i < file.endPos; i++) {
-        let start = i;
 
-        switch (src[i]) {
+    // current char
+    let c = file.startPos;
+
+    let isAtEnd = () => c >= file.endPos;
+
+    while (!isAtEnd()) {
+        let start = c;
+
+        switch (src[c]) {
             case ' ':
             case '\r':
             case '\n':
                 break;
-            case '(': tokens.push({ span: [start, i + 1], ty: TokenType.LParen }); break;
-            case '_': tokens.push({ span: [start, i + 1], ty: TokenType.Underscore }); break;
-            case '#': tokens.push({ span: [start, i + 1], ty: TokenType.Hash }); break;
-            case ')': tokens.push({ span: [start, i + 1], ty: TokenType.RParen }); break;
-            case '[': tokens.push({ span: [start, i + 1], ty: TokenType.LSquare }); break;
-            case ']': tokens.push({ span: [start, i + 1], ty: TokenType.RSquare }); break;
-            case '{': tokens.push({ span: [start, i + 1], ty: TokenType.LBrace }); break;
-            case '}': tokens.push({ span: [start, i + 1], ty: TokenType.RBrace }); break;
+            case '(': tokens.push({ span: [start, c + 1], ty: TokenType.LParen }); break;
+            case '_': tokens.push({ span: [start, c + 1], ty: TokenType.Underscore }); break;
+            case '#': tokens.push({ span: [start, c + 1], ty: TokenType.Hash }); break;
+            case ')': tokens.push({ span: [start, c + 1], ty: TokenType.RParen }); break;
+            case '[': tokens.push({ span: [start, c + 1], ty: TokenType.LSquare }); break;
+            case ']': tokens.push({ span: [start, c + 1], ty: TokenType.RSquare }); break;
+            case '{': tokens.push({ span: [start, c + 1], ty: TokenType.LBrace }); break;
+            case '}': tokens.push({ span: [start, c + 1], ty: TokenType.RBrace }); break;
             case '%':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.RemAssign });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.RemAssign });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Percent });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Percent });
                 }
                 break;
-            case ':': tokens.push({ span: [start, i + 1], ty: TokenType.Colon }); break;
+            case ':': tokens.push({ span: [start, c + 1], ty: TokenType.Colon }); break;
             case '!':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.NotEq });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.NotEq });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Not });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Not });
                 }
                 break;
             case '=':
                 let ty: TokenType;
                 let hi: number;
-                switch (src[i + 1]) {
+                switch (src[c + 1]) {
                     case '=': ty = TokenType.EqEq; hi = 2; break;
                     case '>': ty = TokenType.FatArrow; hi = 2; break;
                     default: ty = TokenType.Assign; hi = 1; break;
                 }
-                tokens.push({ span: [start, i + hi], ty });
-                i += hi - 1;
+                tokens.push({ span: [start, c + hi], ty });
+                c += hi - 1;
                 break;
-            case ';': tokens.push({ span: [start, i + 1], ty: TokenType.Semi }); break;
+            case ';': tokens.push({ span: [start, c + 1], ty: TokenType.Semi }); break;
             case '.':
-                if (src[i + 1] === '.') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.DotDot });
-                    i++;
+                if (src[c + 1] === '.') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.DotDot });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Dot });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Dot });
                 }
                 break;
             case '<':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.Le });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.Le });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Lt });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Lt });
                 }
                 break;
             case '>':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.Ge });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.Ge });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Gt });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Gt });
                 }
                 break;
-            case ',': tokens.push({ span: [start, i + 1], ty: TokenType.Comma }); break;
+            case ',': tokens.push({ span: [start, c + 1], ty: TokenType.Comma }); break;
             case '|':
-                if (src[i + 1] === '|') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.OrOr });
-                    i++;
+                if (src[c + 1] === '|') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.OrOr });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Or });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Or });
                 }
                 break;
             case '+':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.AddAssign });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.AddAssign });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Plus });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Plus });
                 }
                 break;
             case '-':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.SubAssign });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.SubAssign });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Minus });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Minus });
                 }
                 break;
             case '*':
-                if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.MulAssign });
-                    i++;
-                } else if (src[i + 1] === '.') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.StarDot });
-                    i++;
+                if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.MulAssign });
+                    c++;
+                } else if (src[c + 1] === '.') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.StarDot });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Star });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Star });
                 }
                 break;
             case '&':
-                if (src[i + 1] === '&') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.AndAnd });
-                    i++;
+                if (src[c + 1] === '&') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.AndAnd });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.And });
+                    tokens.push({ span: [start, c + 1], ty: TokenType.And });
                 }
                 break;
             case '/': {
-                if (src[i + 1] === '/') {
-                    while (i < src.length && src[i] !== '\n') i++;
-                } else if (src[i + 1] === '=') {
-                    tokens.push({ span: [start, i + 2], ty: TokenType.DivAssign });
-                    i++;
+                if (src[c + 1] === '/') {
+                    while (!isAtEnd() && src[c] !== '\n') c++;
+                } else if (src[c + 1] === '=') {
+                    tokens.push({ span: [start, c + 2], ty: TokenType.DivAssign });
+                    c++;
                 } else {
-                    tokens.push({ span: [start, i + 1], ty: TokenType.Slash }); break;
+                    tokens.push({ span: [start, c + 1], ty: TokenType.Slash }); break;
                 }
                 break;
             }
             case '"':
-                i++;
-                while (src[i] !== '"') i++;
-                tokens.push({ span: [start, i + 1], ty: TokenType.String });
+                c++;
+                while (!isAtEnd() && src[c] !== '"') c++;
+                if (isAtEnd()) err([c, c], 'Unexpected end of file');
+                tokens.push({ span: [start, c + 1], ty: TokenType.String });
                 break;
             default:
-                if (src[i] === 'b' && src[i + 1] === '\'') {
-                    const startPos = i;
+                if (src[c] === 'b' && src[c + 1] === '\'') {
+                    const startPos = c;
                     // usually byte character lines are only going to be one byte, but \n is two in the source code, so use a loop here.
                     // we don't do any parsing or validation here and leave that to the parser
-                    i += 2;
-                    while (src[i] !== '\'') { i++; }
-                    tokens.push({ ty: TokenType.ByteChar, span: [startPos, i + 1] });
-                } else if (isAlphaStart(src[i])) {
+                    c += 2;
+                    while (!isAtEnd() && src[c] !== '\'') { c++; }
+                    if (isAtEnd()) err([c, c], 'Unexpected end of file');
+                    tokens.push({ ty: TokenType.ByteChar, span: [startPos, c + 1] });
+                } else if (isAlphaStart(src[c])) {
                     let ident = '';
-                    while (isAlpha(src[i])) ident += src[i++];
-                    let span: Span = [start, i];
-                    i--;
+                    while (!isAtEnd() && isAlpha(src[c])) ident += src[c++];
+                    let span: Span = [start, c];
+                    c--;
                     let ty;
                     switch (ident) {
                         case 'extern': ty = TokenType.Extern; break;
@@ -188,15 +196,16 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                         default: ty = TokenType.Ident; break;
                     }
                     tokens.push({ span, ty });
-                } else if (isDigit(src[i])) {
-                    while (isDigit(src[i]) || src[i] === 'i' || src[i] === 'u') i++;
-                    let span: Span = [start, i];
-                    i--;
+                } else if (isDigit(src[c])) {
+                    while (!isAtEnd() && (isDigit(src[c]) || src[c] === 'i' || src[c] === 'u')) c++;
+                    let span: Span = [start, c];
+                    c--;
                     tokens.push({ span, ty: TokenType.Number });
                 } else {
-                    err([i, i + 1], 'unknown token: ' + src[i]);
+                    err([c, c + 1], 'unknown token: ' + src[c]);
                 }
         }
+        c++
     }
     return tokens;
 }

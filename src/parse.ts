@@ -759,13 +759,17 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
                 const ifSpan = tokens[i++].span;
                 const condition = parseRootSubexpr();
                 const body = parseBlockExpr(true);
-                let _else: Expr | null = null;
+                let _else: Expr & { type: 'If' | 'Block' } | null = null;
                 if (eatToken(TokenType.Else, false)) {
-                    // This seems like a bit of a hack: we parse in a statement context
-                    // so that we don't parse `if ... else { 0 } + 1` as `else ({ 0 } + 1)`
-                    _else = parseRootStmtExpr();
-                    if (_else.type !== 'Block' && _else.type !== 'If') {
-                        err(_else.span, 'else expression must be a block or another chained `if` expression');
+                    switch (tokens[i]?.ty) {
+                        case TokenType.If:
+                            // This seems like a bit of a hack: we parse in a statement context
+                            // so that we don't parse `if ... else { 0 } + 1` as `else ({ 0 } + 1)`
+                            _else = parseRootStmtExpr() as Expr & { type: 'If' }; break;
+                        case TokenType.LBrace:
+                            _else = parseBlockExpr(true); break;
+                        default:
+                            err(tokens[i]?.span || tokens[i - 1].span, 'Expected either a block or chained `if` expression after `else`');
                     }
                 }
                 expr = { type: 'If', condition, then: body, else: _else, span: joinSpan(ifSpan, tokens[i - 1].span) };
@@ -1010,7 +1014,7 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
                 i++;
                 const sig = parseFnSignature();
                 const where = parseMaybeWhereClause();
-                const body = parseRootStmtExpr();
+                const body = parseBlockExpr(true); //parseRootStmtExpr();
 
                 return {
                     type: 'FnDecl',
