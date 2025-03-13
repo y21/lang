@@ -165,7 +165,7 @@ export function tokenize(sm: SourceMap, file: File): Token[] {
                     tokens.push({ ty: TokenType.ByteChar, span: [startPos, c + 1] });
                 } else if (isAlphaStart(src[c])) {
                     let ident = '';
-                    while (isAlpha(src[c])) ident += src[c++];
+                    while (!isAtEnd() && isAlpha(src[c])) ident += src[c++];
                     let span: Span = [start, c];
                     c--;
                     let ty;
