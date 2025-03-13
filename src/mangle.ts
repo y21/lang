@@ -10,7 +10,7 @@ function pathToLlvmSymbol(s: string): string {
         .replaceAll('}', '$RB');
 }
 
-export function mangleTy(ty: Ty): string {
+export function mangleTy(ty: Ty, res: Resolutions): string {
     switch (ty.type) {
         case 'never':
         case 'str':
@@ -19,9 +19,9 @@ export function mangleTy(ty: Ty): string {
         case 'int':
             return (ty.value.signed ? 'i' : 'u') + ty.value.bits;
         case 'Array':
-            return `$array$${ty.len}$${mangleTy(ty.elemTy)}`;
+            return `$array$${ty.len}$${mangleTy(ty.elemTy, res)}`;
         case 'Slice':
-            return `$slice$${mangleTy(ty.elemTy)}`;
+            return `$slice$${mangleTy(ty.elemTy, res)}`;
         case 'TyParam':
         case 'TyVid':
         case 'FnDef':
@@ -29,14 +29,14 @@ export function mangleTy(ty: Ty): string {
         case 'TraitFn':
             spanless_bug(`attempted to mangle ${ty.type}`);
         case 'Pointer':
-            return `$ptr$${ty.mtb}$${mangleTy(ty.pointee)}`;
+            return `$ptr$${ty.mtb}$${mangleTy(ty.pointee, res)}`;
         case 'Alias': {
-            let out = mangleTy(instantiateTy(ty.alias, ty.args));
+            let out = pathToLlvmSymbol(res.itemUniquePathsForCodegen.get(ty.decl)!);
             if (ty.args.length > 0) {
                 out += '$LT$';
                 for (let i = 0; i < ty.args.length; i++) {
                     if (i !== 0) out += '$$';
-                    out += mangleTy(ty.args[i]);
+                    out += mangleTy(ty.args[i], res);
                 }
                 out += '$RT$';
             }
@@ -45,7 +45,7 @@ export function mangleTy(ty: Ty): string {
         case 'Record': {
             let out = '$LB$';
             for (const [k, v] of ty.fields) {
-                out += k + '$$' + mangleTy(v);
+                out += k + '$$' + mangleTy(v,res );
             }
             out += '$RB$';
             return out;
@@ -54,7 +54,7 @@ export function mangleTy(ty: Ty): string {
             let out = '$LP$';
             for (let i = 0; i < ty.elements.length; i++) {
                 if (i !== 0) out += '$$';
-                out += mangleTy(ty.elements[i]);
+                out += mangleTy(ty.elements[i], res);
             }
             out += '$RP$';
             return out;
@@ -81,7 +81,7 @@ export function mangleInstFn(res: Resolutions, decl: FnDecl, args: Ty[]): string
             if (i !== 0) {
                 mangled += '$$';
             }
-            mangled += mangleTy(args[i]);
+            mangled += mangleTy(args[i], res);
         }
 
         mangled += '$GT$';

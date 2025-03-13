@@ -12,4 +12,12 @@ fn main() {
     m2::foo();
     m3::main();
     main();
+
+    // Make sure that aliases get unique paths despite aliasing the same type.
+    type X = {};
+    type Y = {};
+
+    fn coerce<T>() {}
+    coerce::<X>();
+    coerce::<Y>();
 }

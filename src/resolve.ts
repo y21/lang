@@ -626,6 +626,7 @@ export function computeResolutions(ast: Module): Resolutions {
             case 'TyAlias': {
                 tyAliasScope = currentPath;
                 withNamedScope(stmt.name, () => {
+                    itemUniquePathsForCodegen.set(stmt, currentPath);
                     if (stmt.alias.type !== 'Enum') {
                         // We only register a resolution to the type alias 
                         typeNs.set(currentPath, stmt);

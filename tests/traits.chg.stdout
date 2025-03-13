@@ -51,7 +51,7 @@ ret i32 %ret.0
 
 }
 
-define i32 @root$Foo$$LB$3$RB$baz$LT$$LB$x$$i32$RB$$LT$i32$RT$$$i32$$i32$GT$({i32} %lt.1, i32 %lt.2) {
+define i32 @root$Foo$$LB$3$RB$baz$LT$root$Foo$LT$i32$RT$$$i32$$i32$GT$({i32} %lt.1, i32 %lt.2) {
 prologue:
 %l.0 = alloca i32
 %l.1 = alloca {i32}
@@ -68,7 +68,7 @@ ret i32 %ret.0
 
 }
 
-define void @root$print$LT$$LB$x$$i32$RB$$LT$i32$RT$$GT$({i32} %lt.0) {
+define void @root$print$LT$root$Foo$LT$i32$RT$$GT$({i32} %lt.0) {
 prologue:
 %l.0 = alloca {i32}
 store {i32} %lt.0, {i32}* %l.0
@@ -109,7 +109,7 @@ store i32 10, i32* %p.2
 %t.3 = load {i32}, {i32}* %t.1
 store {i32} %t.3, {i32}* %l.5
 %l.6 = load {i32}, {i32}* %l.5
-%l.7 = call i32 @root$Foo$$LB$3$RB$baz$LT$$LB$x$$i32$RB$$LT$i32$RT$$$i32$$i32$GT$({i32} %l.6, i32 55)
+%l.7 = call i32 @root$Foo$$LB$3$RB$baz$LT$root$Foo$LT$i32$RT$$$i32$$i32$GT$({i32} %l.6, i32 55)
 br label %bb.4
 
 bb.4:
@@ -128,7 +128,7 @@ store i32 %l.9, i32* %p.6
 %t.7 = load {i32}, {i32}* %t.5
 store {i32} %t.7, {i32}* %l.8
 %l.11 = load {i32}, {i32}* %l.8
-%l.10 = call {} bitcast(void({i32})* @root$print$LT$$LB$x$$i32$RB$$LT$i32$RT$$GT$ to {}({i32})*)({i32} %l.11)
+%l.10 = call {} bitcast(void({i32})* @root$print$LT$root$Foo$LT$i32$RT$$GT$ to {}({i32})*)({i32} %l.11)
 br label %bb.7
 
 }

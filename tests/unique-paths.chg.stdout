@@ -9,7 +9,12 @@ expr @ 13:9 13:13 => fn main(...)
 expr @ 13:9 13:15 => ()
 expr @ 14:5 14:9 => fn main(...)
 expr @ 14:5 14:11 => ()
-expr @ 10:11 16:1 => ()
+expr @ 20:20 21:0 => ()
+expr @ 21:15 21:16 => fn coerce(...)
+expr @ 21:15 21:18 => ()
+expr @ 22:15 22:16 => fn coerce(...)
+expr @ 22:15 22:18 => ()
+expr @ 10:11 24:1 => ()
 
 
 
@@ -40,6 +45,24 @@ ret void
 
 }
 
+define void @root$main$$LB$3$RB$coerce$LT$root$main$$LB$3$RB$X$GT$() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
+define void @root$main$$LB$3$RB$coerce$LT$root$main$$LB$3$RB$Y$GT$() {
+prologue:
+br label %bb.0
+
+bb.0:
+ret void
+
+}
+
 define void @main() {
 prologue:
 br label %bb.0
@@ -61,6 +84,14 @@ bb.3:
 br label %bb.4
 
 bb.4:
+%l.4 = call {} bitcast(void()* @root$main$$LB$3$RB$coerce$LT$root$main$$LB$3$RB$X$GT$ to {}()*)()
+br label %bb.5
+
+bb.5:
+%l.5 = call {} bitcast(void()* @root$main$$LB$3$RB$coerce$LT$root$main$$LB$3$RB$Y$GT$ to {}()*)()
+br label %bb.6
+
+bb.6:
 ret void
 
 }
