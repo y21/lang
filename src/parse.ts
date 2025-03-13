@@ -1010,7 +1010,7 @@ export function parse(sm: SourceMap, attrs: AttrMap, file: File): Module {
                 i++;
                 const sig = parseFnSignature();
                 const where = parseMaybeWhereClause();
-                const body = parseRootStmtExpr();
+                const body = parseBlockExpr(true); //parseRootStmtExpr();
 
                 return {
                     type: 'FnDecl',
